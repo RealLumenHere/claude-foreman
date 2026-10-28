@@ -655,3 +655,50 @@ def test_result_text_without_subscription_phrase_is_unaffected():
     st.observe({"type": "result", "subtype": "success", "is_error": False,
                 "result": "all done"})
     assert st.saw_subscription_disabled is False
+
+
+# wq#4765 (agent-authority DESIGN.md §2.3 step 2, §2.6): RunState captures the result
+# frame's stop_reason + deferred_tool_use so fworker.py can detect a PreToolUse `defer`
+# and the F7 "resume unavailable" case without classify() having to grow a new verdict
+# for either — the hold/resume flow lives entirely in fworker.py's run loop.
+
+def test_tool_deferred_stop_reason_and_deferred_tool_use_are_captured():
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init", "session_id": "s1"})
+    st.observe({"type": "result", "subtype": "success", "is_error": False,
+                "stop_reason": "tool_deferred",
+                "deferred_tool_use": {"id": "toolu_01abc", "name": "Read",
+                                      "input": {"file_path": "/other/repo/f.py"}}})
+    assert st.stop_reason == "tool_deferred"
+    assert st.deferred_tool_use == {"id": "toolu_01abc", "name": "Read",
+                                    "input": {"file_path": "/other/repo/f.py"}}
+    assert st.session_id == "s1"
+
+
+def test_tool_deferred_unavailable_stop_reason_is_captured_with_no_deferred_tool_use():
+    # §2.1/F7: a resume whose deferred call can no longer be re-fired (session pruned,
+    # or otherwise gone) reports stop_reason tool_deferred_unavailable and carries no
+    # deferred_tool_use at all.
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init", "session_id": "s2"})
+    st.observe({"type": "result", "subtype": "success", "is_error": False,
+                "stop_reason": "tool_deferred_unavailable"})
+    assert st.stop_reason == "tool_deferred_unavailable"
+    assert st.deferred_tool_use is None
+
+
+def test_ordinary_result_frame_leaves_stop_reason_and_deferred_tool_use_unset():
+    st = RunState()
+    st.observe({"type": "system", "subtype": "init"})
+    st.observe({"type": "result", "subtype": "success", "is_error": False})
+    assert st.stop_reason is None
+    assert st.deferred_tool_use is None
+
+
+def test_to_dict_carries_stop_reason_and_deferred_tool_use():
+    st = RunState()
+    st.observe({"type": "result", "subtype": "success", "is_error": False,
+                "stop_reason": "tool_deferred", "deferred_tool_use": {"id": "toolu_x"}})
+    d = st.to_dict()
+    assert d["stop_reason"] == "tool_deferred"
+    assert d["deferred_tool_use"] == {"id": "toolu_x"}

@@ -159,6 +159,14 @@ class RunState:
         self.result_is_error = None
         self.result_text = _UNSET
         self.terminal_reason = None
+        # wq#4765 (agent-authority DESIGN.md §2.3 step 2, §2.6): a PreToolUse `defer`
+        # ends the turn with a result frame carrying stop_reason "tool_deferred" (a hold
+        # just started) or "tool_deferred_unavailable" (F7: the held call can't be
+        # resumed — session pruned or otherwise gone). Distinct from terminal_reason,
+        # which the CLI also happens to use the string "tool_deferred_unavailable" for —
+        # fworker.py reads stop_reason specifically, per DESIGN.md's wire-level claim.
+        self.stop_reason = None
+        self.deferred_tool_use = None
         self.last_frame_type = None
         self.last_event_ts = None
         self.hung = False
@@ -323,6 +331,8 @@ class RunState:
             self.result_subtype = frame.get("subtype")
             self.result_is_error = frame.get("is_error")
             self.terminal_reason = frame.get("terminal_reason")
+            self.stop_reason = frame.get("stop_reason")
+            self.deferred_tool_use = frame.get("deferred_tool_use")
             if "result" in frame:
                 self.result_text = frame.get("result")
                 if isinstance(self.result_text, str) and _MODEL_NOT_FOUND_RE.search(self.result_text):
@@ -356,6 +366,7 @@ class RunState:
             "result_is_error": self.result_is_error,
             "result_text": None if self.result_text is _UNSET else self.result_text,
             "terminal_reason": self.terminal_reason,
+            "stop_reason": self.stop_reason, "deferred_tool_use": self.deferred_tool_use,
             "turns": self.turns,
             "saw_auth_failure": self.saw_auth_failure,
             "saw_model_not_found": self.saw_model_not_found,

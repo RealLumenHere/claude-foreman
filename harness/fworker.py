@@ -557,6 +557,12 @@ EXIT_MODEL_NOT_FOUND = 22  # wq#1442: dispatched --model id/alias rejected by th
 EXIT_RUNG_FAULT = 23  # wq#2128: the model backend failed, not the ticket — released to open
 EXIT_LOCAL_ESCALATED = 24  # wq#2581: local rung exhausted, handed to a cloud rung — released to open
                       # uncharged, backend put on cooldown
+EXIT_AWAITING_GRANT = 25  # wq#4765 (§2.3 step 3): a PreToolUse `defer` parked the ticket
+                          # (wq await-grant) awaiting a human/orchestrator decision —
+                          # uncharged, no refill kick (not in main()'s trigger_refill set)
+EXIT_HOLD_RESUME_LOST = 26  # wq#4765 F7: a grant-approved resume's deferred call could not
+                            # be re-fired (session pruned, or tool_deferred_unavailable) —
+                            # released back to open uncharged for a fresh attempt
 
 # wq#1261 (#13 item 3): expired/rework fire tickets re-dispatch at most FIRE_ATTEMPT_FENCE
 # times before the 3rd strike escalates to FRANK instead of running again. Only outcomes
@@ -715,6 +721,93 @@ def wq_claim(ticket_id):
 
 def wq_heartbeat(ticket_id):
     wq("heartbeat", str(ticket_id))
+
+
+# ---------------------------------------------------------------------------
+# wq#4765 (agent-authority DESIGN.md §2.3 steps 2-6, §2.6): hold/resume grant reads.
+# wq's own write path (`wq grant request/approve/deny/consume`) belongs to hold_gate.py
+# and a human/orchestrator — fworker only ever READS grant_requests, via `wq grant
+# list/show --json` (wq#4765 companion bin-repo change), never the sqlite file
+# directly: wq owns that db's locking and schema.
+# ---------------------------------------------------------------------------
+
+def grant_pending_row(ticket_id, session_id):
+    """The live pending grant_requests row hold_gate.py filed for this ticket's deferred
+    call, or None if there isn't exactly one. §2.6: tool_use_id binds the approval to
+    THE ONE pending call, so more than one live pending row for the same (ticket,
+    session) is itself a sign something is wrong — treated the same as zero (the
+    caller's cross-check then mismatches and falls through to CAPABILITY_DENIED,
+    never guesses which row was meant)."""
+    if not session_id:
+        return None
+    p = wq("grant", "list", "--ticket", str(ticket_id), "--session", session_id,
+           "--state", "pending", "--json")
+    if p.returncode != 0:
+        log(f"wq#{ticket_id}: grant list --json failed: {p.stdout} {p.stderr}")
+        return None
+    try:
+        rows = json.loads(p.stdout)
+    except ValueError:
+        log(f"wq#{ticket_id}: grant list --json gave unparseable output: {p.stdout!r}")
+        return None
+    return rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+
+
+def grant_row_by_id(req_id):
+    """The grant_requests row by id, or None. Used on a grant-approved resume, where
+    the ticket row already names the exact `grant_req` — no (ticket, session) search
+    needed, just a direct read of that row's class/target."""
+    p = wq("grant", "show", str(req_id), "--json")
+    if p.returncode != 0:
+        log(f"grant show {req_id} --json failed: {p.stdout} {p.stderr}")
+        return None
+    try:
+        rows = json.loads(p.stdout)
+    except ValueError:
+        return None
+    return rows[0] if isinstance(rows, list) and len(rows) == 1 else None
+
+
+def wq_await_grant(ticket_id, req_id, session_id):
+    p = wq("await-grant", str(ticket_id), "--req", str(req_id), "--session", session_id)
+    return p.returncode == 0, p.stdout + p.stderr
+
+
+def handle_tool_deferred(ticket_id, state):
+    """§2.3 steps 2-3, §2.6, §2.7 F4/F9: the child's result frame carried stop_reason
+    "tool_deferred" — a PreToolUse `defer` ended the turn. Cross-check deferred_tool_use.id
+    against the grant_requests row hold_gate.py filed for this exact call; a clean match
+    parks the ticket (`wq await-grant`) and returns EXIT_AWAITING_GRANT, uncharged. A
+    mismatch (stale/missing row, race, no session_id) is HOLD_FRAME_MISMATCH: returns
+    None so the caller falls through to the ordinary classify()/retry path — exactly
+    today's CAPABILITY_DENIED, never a parked ticket for a request that may not
+    describe this call."""
+    dtu = state.deferred_tool_use or {}
+    dtu_id = dtu.get("id")
+    row = grant_pending_row(ticket_id, state.session_id)
+    if not dtu_id or not row or row.get("tool_use_id") != dtu_id:
+        log(f"wq#{ticket_id}: HOLD_FRAME_MISMATCH (deferred_tool_use.id={dtu_id!r}, "
+            f"session={state.session_id!r}, matching grant row={row!r}) — treating as "
+            f"CAPABILITY_DENIED, not parking")
+        return None
+    req_id = row["id"]
+    ok, out = wq_await_grant(ticket_id, req_id, state.session_id)
+    if not ok:
+        log(f"wq#{ticket_id}: await-grant failed (req={req_id}): {out.strip()} — "
+            f"releasing instead of parking")
+        wq_release(ticket_id)
+        print("RELEASED")
+        return EXIT_CLAIM_ERROR
+    ntfy("wq grant awaiting approval",
+         f"wq#{ticket_id}: held on class={row.get('class') or '-'} "
+         f"target={row.get('target') or '-'}. "
+         f"Approve: /home/lumen/bin/wq grant approve {req_id}   "
+         f"Deny: /home/lumen/bin/wq grant deny {req_id} --reason \"<why>\"",
+         priority="high")
+    log(f"wq#{ticket_id}: AWAITING_GRANT req={req_id} class={row.get('class')} "
+        f"target={row.get('target')} session={state.session_id}")
+    print("AWAITING_GRANT")
+    return EXIT_AWAITING_GRANT
 
 
 def apply_deferral_gate(ticket_id, notes):
@@ -2602,8 +2695,25 @@ def local_profile_env():
 
 
 def build_claude_cmd(prompt, model, effort, settings_file, add_dirs, max_turns=None,
-                      resume_session=None, claude_bin="claude", local_profile=False):
-    cmd = [claude_bin, "-p", prompt]
+                      resume_session=None, claude_bin="claude", local_profile=False,
+                      resume_no_prompt=False):
+    """wq#4765 (§2.3 step 6, §2.7 F9): `resume_no_prompt` is the grant-approval resume
+    shape — bare `-p` with no prompt text, so the CLI re-fires PreToolUse for the one
+    pending deferred call instead of dropping it (the docs' own words: "-p without a
+    prompt when you resume a session with a deferred tool call"). Refuses outright
+    rather than silently sending a prompt anyway: a resume that carries one drops the
+    deferred call, and that failure mode is otherwise invisible until the ticket is
+    mysteriously still stuck on the same hold a turn later."""
+    if resume_no_prompt:
+        if prompt:
+            raise ValueError("fworker refuses to spawn a resume with a prompt (wq#4765 "
+                              "F9): a deferred tool call is dropped if --resume carries "
+                              f"one (resume_session={resume_session!r})")
+        if not resume_session:
+            raise ValueError("resume_no_prompt requires resume_session")
+        cmd = [claude_bin, "-p"]
+    else:
+        cmd = [claude_bin, "-p", prompt]
     if model:
         cmd += ["--model", model]
     if effort:
@@ -4123,7 +4233,7 @@ def run_fire_ticket(args):
 
 
 def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None,
-               ceiling_spent=False):
+               ceiling_spent=False, grant_resume=False):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
@@ -4165,8 +4275,27 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     ticket_needs = needs_mod.parse(ticket.get("needs"), ticket.get("detail", ""))
     add_dirs = add_dirs_for(archetype, ticket_needs.dirs, repo=args.repo)
     add_dirs += [d for d in scratch_grant_dirs(ticket_id) if d not in add_dirs]
+    # wq#4765 (§2.4 point 1, "Claude layer"): a grant-approved resume's H1 grant widens
+    # add_dirs by exactly the approved target directory — read from the ticket's own
+    # grant_req row, never re-derived, so this spawn can only ever see what was actually
+    # approved. H2 (repo-read) grants are the broker's business (needs:repo), not add_dir.
+    grant_row = None
+    if grant_resume and ticket.get("grant_req"):
+        grant_row = grant_row_by_id(ticket["grant_req"])
+        if grant_row and grant_row.get("class") == "H1" and grant_row.get("target"):
+            target = grant_row["target"]
+            if target not in add_dirs:
+                add_dirs.append(target)
 
-    if resume_session:
+    # wq#4765: a grant-approved resume carries NO prior_worktree (it is a brand-new
+    # fworker process, not an in-process recursive resume like steer/tool_ceiling/HANG
+    # below) — it reaches here via resume_session alone. make_worktree()'s own
+    # adopt-existing-if-ours branch (wq#649) is what makes this safe: (ticket_id,
+    # attempt) is a deterministic path, and next_attempt_n() returns the SAME attempt
+    # number here that the original deferred attempt used (that attempt never wrote
+    # attempt-N.json — EXIT_AWAITING_GRANT is uncharged), so the worktree the deferred
+    # call ran in is adopted, not recreated.
+    if prior_worktree:
         worktree, branch = prior_worktree, None
     else:
         worktree, branch = make_worktree(args.repo, ticket_id, attempt,
@@ -4218,12 +4347,15 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
                   else turn_gap_timeout(args.model))
     # wq#4289: the aider runtime never sends this prompt, so its size can't refuse it.
     sends_prompt_local = is_local_rung(args.model) and not aider_runtime
-    over_ctx = (None if charging.legacy_mode() or not sends_prompt_local
+    # wq#4765: a grant-approved resume sends NO prompt at all (build_claude_cmd below,
+    # resume_no_prompt=True) — `prompt` here is computed but never transmitted, so its
+    # size can't legitimately refuse this spawn.
+    over_ctx = (None if charging.legacy_mode() or not sends_prompt_local or grant_resume
                 else charging.prompt_over_ctx(prompt, cli_profile=cli_profile))
     if over_ctx:
         raise SpawnRefused("PROMPT_OVER_CTX", over_ctx, worktree=worktree)
     over_budget = (charging.prompt_over_budget(prompt_tokens_est, first_frame_s)
-                   if sends_prompt_local else None)
+                   if sends_prompt_local and not grant_resume else None)
     if over_budget:
         raise SpawnRefused("PROMPT_OVER_BUDGET", over_budget, worktree=worktree)
 
@@ -4272,10 +4404,14 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     loop_tracker = action_gate.LoopTracker(steered=bool(steer),
                                            ceiling_spent=ceiling_spent)
     settings_file = resolve_worker_settings(args.repo, ticket_id, archetype=archetype)
-    cmd = build_claude_cmd(steer or prompt, args.model, args.effort, settings_file,
+    # wq#4765 (§2.3 step 6, §2.7 F9): a grant-approved resume spawns with --resume <sid>
+    # and NO prompt — the CLI drops the deferred call if a resume carries one, so
+    # grant_resume forces prompt=None here regardless of what load_worker_prompt built.
+    cmd = build_claude_cmd(None if grant_resume else (steer or prompt),
+                            args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin,
-                            local_profile=cli_profile)
+                            local_profile=cli_profile, resume_no_prompt=grant_resume)
 
     # wq#1439 (§4 row i): the add-dir list is the argv proof that a needs:dir tag
     # reached the child, so it is logged in full rather than truncated with cmd[:6].
@@ -4304,6 +4440,26 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker, first_frame_s=first_frame_s,
         post_result_bg_grace_s=getattr(args, "post_result_bg_grace", None))
+    if state.stop_reason == "tool_deferred":
+        # wq#4765 (§2.3 steps 2-3): the turn ended on a PreToolUse `defer`, clean exit
+        # (killed_reason is None here — the CLI itself stopped the turn, no watchdog
+        # fired). A clean cross-check match parks the ticket and returns here directly;
+        # a mismatch (None) falls through to the ordinary classify()/retry path below,
+        # same as today's plain CAPABILITY_DENIED.
+        outcome = handle_tool_deferred(ticket_id, state)
+        if outcome is not None:
+            return outcome
+    elif state.stop_reason == "tool_deferred_unavailable" and grant_resume:
+        # §2.7 F7: this grant-approved resume's deferred call can no longer be
+        # re-fired (session pruned past cleanupPeriodDays, or otherwise gone). The
+        # approval is spent either way — release (clears resume_session/grant_req,
+        # wq's own `wq release`) rather than treat this as an ordinary attempt
+        # failure; a fresh attempt starts the hold from scratch if the call recurs.
+        log(f"wq#{ticket_id}: HOLD_RESUME_LOST (tool_deferred_unavailable) on resumed "
+            f"session {state.session_id} — releasing for a fresh attempt")
+        wq_release(ticket_id)
+        print("HOLD_RESUME_LOST")
+        return EXIT_HOLD_RESUME_LOST
     if killed_reason == "steer" and state.session_id:
         # wq#2138: same attempt number — a harness-side refusal must not cost the
         # ticket an attempt. The resumed tracker is `steered`, so a second refusal
@@ -5352,7 +5508,17 @@ def cmd_run(args):
             return handle_unhandled_crash(args, args.ticket, None, tb, context="fire-mode run")
 
     attempt = next_attempt_n(args.ticket)
+    # wq#4765 (§2.3 steps 5-6): `wq grant approve` reopens a parked ticket to `open`
+    # WITH resume_session kept (never cleared there — only release/done clear it), so
+    # a freshly claimed ticket carrying one is exactly "this claim is the grant-approved
+    # resume" and nothing else: every path that returns a ticket to `open` any other
+    # way (release, a fresh dispatch) clears resume_session/grant_req first.
+    resume_sid = wq_show(args.ticket).get("resume_session")
     try:
+        if resume_sid:
+            log(f"wq#{args.ticket}: grant-approved resume (session {resume_sid}) — "
+                f"spawning --resume with no prompt, same attempt {attempt}")
+            return do_attempt(args, attempt, resume_session=resume_sid, grant_resume=True)
         return do_attempt(args, attempt)
     except SpawnRefused as e:
         # wq#1331: preflight refusal — release uncharged, leave ticket open with a
