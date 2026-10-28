@@ -528,8 +528,8 @@ stage4b_build_cargo_tools() {
     crate="$(jq -r .crate <<<"$c")"; ver="$(jq -r .version <<<"$c")"; bin="$(jq -r .bin <<<"$c")"
     bdeps="$(jq -r '.build_apt | join(" ")' <<<"$c")"
     log "stage4b: cargo install $crate $ver (container ubuntu:$XUBUNTU_VERSION, --locked)"
-    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -euc \
-      "export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq --no-install-recommends cargo rustc build-essential pkg-config ca-certificates $bdeps; cargo install $crate --version $ver --locked --root /out"
+    docker run --rm -v "$out:/out" "ubuntu:$XUBUNTU_VERSION" bash -c \
+      "set -eu; export DEBIAN_FRONTEND=noninteractive; apt-get update -qq; apt-get install -y -qq --no-install-recommends cargo rustc build-essential pkg-config ca-certificates $bdeps; cargo install $crate --version $ver --locked --root /out 2>&1 || true; test -x /out/bin/$bin"
     [ -x "$out/bin/$bin" ] || fail "cargo build of $crate $ver produced no $out/bin/$bin"
     # wq#4673: Ubuntu 26.04's uutils coreutils `install` returns non-zero on an
     # existing target ("Already exists") instead of GNU's silent overwrite,
