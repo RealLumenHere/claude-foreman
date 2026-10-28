@@ -148,9 +148,19 @@ BUILTIN_RED = [
     (r'\bshred\b', "shred (key/credential destruction)"),
     (r'\brm\b[^|;&]*(\.ssh\b|\.secrets\b|\.credentials|id_ed25519|id_rsa|\.token\b)',
      "credential/key material deletion"),
+]
+
+# Hardware write/erase/fuse class (T1, wq#4746) — the floored half of the
+# unconditional RED table. Same shape and same early loop as BUILTIN_RED, but
+# every entry carries hw_floor=True: these actions are one-time and physically
+# irreversible, so neither BUILTIN_FLASH's verified-backup escape hatch nor a
+# judge allow under FOREMAN_JUDGE_ENFORCE=1 can make them recoverable.
+# Membership in THIS table is the floor tag (wq#4756) — put a new
+# one-time-irreversible pattern here, not in BUILTIN_RED above, which stays
+# judge-eligible for the general destructive-but-restorable class.
+BUILTIN_HARDWARE_RED = [
     # wq#4746 (wq#4744 T1 gap-analysis §2(a)): eFuse burns are one-time and
-    # irreversible — unlike BUILTIN_FLASH below, no verified backup makes a
-    # blown fuse undoable, so this stays unconditional RED regardless of rules.
+    # irreversible — no verified backup makes a blown fuse undoable.
     (r'\bespefuse(\.py)?\b[^|;&]*\bburn_\w+\b', "espefuse burn (one-time, irreversible eFuse write)"),
 ]
 
@@ -758,8 +768,9 @@ def classify_bash(cmd, rules, cwd=None):
     hw_floor (wq#4748 T4) is True only for a RED that must never be
     judge-allowed under FOREMAN_JUDGE_ENFORCE=1, whatever tier the judge
     would assign: BUILTIN_FLASH, the research gate (including PRIOR_ART.md
-    tamper), the future hardware write/erase/fuse class (T1, wq#4746 --
-    tag any new table entry there the same way once it lands), or a
+    tamper), the hardware write/erase/fuse class BUILTIN_HARDWARE_RED (T1,
+    wq#4746 -- floored by table membership since wq#4756; add a new
+    one-time-irreversible pattern there, not to BUILTIN_RED), or a
     hardware_class project rule (red_patterns/backup_required_before on a
     project whose compiled rules set hardware_class), a write-class action
     lacking verified target evidence, or a mutation of a declared recovery
@@ -772,6 +783,11 @@ def classify_bash(cmd, rules, cwd=None):
     # loose-over-precise on the raw command.
     stripped = strip_quoted_heredoc_bodies(cmd)
     for target in (stripped, _norm(stripped)):
+        # wq#4756: checked BEFORE BUILTIN_RED so that when a command matches
+        # both classes the floored verdict wins (fail-safe ordering).
+        for pat, reason in BUILTIN_HARDWARE_RED:
+            if re.search(pat, target, re.IGNORECASE):
+                return "RED", reason, None, True
         for pat, reason in BUILTIN_RED:
             if reason is None:
                 continue

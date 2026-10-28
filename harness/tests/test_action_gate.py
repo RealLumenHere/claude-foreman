@@ -5,6 +5,7 @@ prove project rules are additive, prove the hook fails closed."""
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import textwrap
@@ -426,6 +427,58 @@ def test_judge_enforce_hardware_floor_denies_project_rule(tmp_path):
     assert not touchfile.exists(), "judge binary was called for a hardware-floor RED"
     kinds = [e["event"] for e in _events(tmp_path, "hw-floor-project-rule")]
     assert kinds == ["gate_red_block", "gate_hardware_floor_deny"]
+
+
+# wq#4756 (wq#4754 verify-pass on wq#4748): BUILTIN_RED had no per-entry floor
+# tag, so wq#4746's eFuse-burn row -- put there precisely because
+# BUILTIN_FLASH's verified-backup escape hatch is unsound for a fuse burn --
+# was judge-eligible. The floored patterns now live in BUILTIN_HARDWARE_RED.
+
+# One representative command per BUILTIN_HARDWARE_RED pattern. The invariant
+# test below fails if a pattern is added without one, so a future
+# one-time-irreversible row cannot land untested (wq#2630).
+HARDWARE_RED_CASES = [
+    "espefuse.py burn_efuse FLASH_CRYPT_CNT 1",
+]
+
+
+def test_builtin_hardware_red_every_pattern_has_a_case():
+    for pat, _reason in ag.BUILTIN_HARDWARE_RED:
+        assert any(re.search(pat, c, re.IGNORECASE) for c in HARDWARE_RED_CASES), (
+            f"BUILTIN_HARDWARE_RED pattern {pat!r} has no HARDWARE_RED_CASES "
+            f"representative -- add one so the judge-enforce floor is proven")
+
+
+@pytest.mark.parametrize("cmd", HARDWARE_RED_CASES)
+def test_judge_enforce_hardware_floor_denies_builtin_hardware_red(tmp_path, cmd):
+    """No hardware_class project, no flash/research gate in play -- isolates the
+    BUILTIN_HARDWARE_RED table itself as the source of the floor."""
+    touchfile = tmp_path / "touched"
+    judge = _fake_judge(tmp_path, "fake_judge_allow_touch4.py", FAKE_JUDGE_ALLOW_TOUCH)
+    rc, err = run_hook(bash_payload(cmd), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FAKE_JUDGE_TOUCHFILE": str(touchfile), "FOREMAN_WORKER": "hw-floor-hwred"})
+    assert rc == 2, f"BUILTIN_HARDWARE_RED must deny under the hardware floor: {err}"
+    assert "ACTION BLOCKED" in err
+    assert not touchfile.exists(), "judge binary was called for a hardware-floor RED"
+    kinds = [e["event"] for e in _events(tmp_path, "hw-floor-hwred")]
+    assert kinds == ["gate_red_block", "gate_hardware_floor_deny"]
+
+
+@pytest.mark.parametrize("cmd,expect_floor", [
+    # inside the fix's table
+    ("espefuse.py burn_efuse FLASH_CRYPT_CNT 1", True),
+    # outside it: wq#4746's sibling verb, which landed in BUILTIN_FLASH
+    ("esptool.py erase_flash", True),
+    # outside it: plain destructive BUILTIN_RED stays judge-eligible
+    ("mkfs.ext4 /dev/sdz", False),
+    ("dd if=/dev/zero of=/dev/sda bs=4M", False),
+])
+def test_classify_bash_hw_floor_by_table(cmd, expect_floor):
+    verdict, _reason, _snap, hw_floor = ag.classify_bash(cmd, {})
+    assert verdict == "RED", cmd
+    assert hw_floor is expect_floor, cmd
 
 
 def test_judge_enforce_non_hardware_red_still_reaches_judge(tmp_path):

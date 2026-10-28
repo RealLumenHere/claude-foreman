@@ -200,6 +200,15 @@ during this audit.
   st-flash, stm32flash, avrdude, dfu-util, rkdeveloptool, upgrade_tool, sunxi-fel/xfel,
   mtkclient, flashrom erase and MTD utilities, plus `/dev/mtd*` and `/dev/mem` targets. Keep
   their read operations GREEN. Add tests.
+  *Status (wq#4746 + wq#4756):* landed. The write/erase verbs went into `BUILTIN_FLASH`
+  (`harness/action_gate.py:171-204`), which the T4 hardware floor already covers. The
+  one-time-irreversible eFuse burn went to `BUILTIN_RED` instead — correct for its
+  unconditional posture, but that table has no floor tag, so wq#4754's verify-pass found it
+  judge-allowable under `FOREMAN_JUDGE_ENFORCE=1`. wq#4756 split the floored half out into
+  `BUILTIN_HARDWARE_RED` (`harness/action_gate.py:153-165`), checked ahead of `BUILTIN_RED`
+  in the same early loop with `hw_floor=True` (`harness/action_gate.py:786-790`); table
+  membership is now the floor tag, and `test_builtin_hardware_red_every_pattern_has_a_case`
+  fails if a pattern is added without a judge-enforce case.
 - **T2** Gate hardware MCP tools: a PreToolUse matcher for `mcp__.*` that runs action_gate on
   hardware servers, plus a server-side energize-confirm token in the openocd, flashrom and
   plugin-flashrom MCP servers (hal-spec §9.2a). A boolean the model passes does not count.
