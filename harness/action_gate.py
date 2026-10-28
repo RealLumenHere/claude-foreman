@@ -126,16 +126,20 @@ BUILTIN_RED = [
     (r'\bwipe[\s_]+data\b|--wipe_data\b', "wipe data (Android destructive)"),
     (r'\bfastboot\b\s+(-w\b|erase\b|format\b)', "fastboot erase/format/-w"),
     (r'\brecovery\b[^|;&]*--wipe', "recovery wipe"),
-    (r'(>|>>)\s*/dev/(sd|nvme|mmcblk|block/)', "shell redirect onto block device"),
-    (r'\bof=/dev/(sd|nvme|mmcblk|block/)', "dd/tool write onto block device"),
-    (r'\b(cp|cat|tee|pv)\b[^|;&]*\s/dev/(sd[a-z]|nvme\d|mmcblk\d|block/)',
-     "raw write onto block device"),
+    (r'(>|>>)\s*/dev/(sd|nvme|mmcblk|block/|mtd|mem)', "shell redirect onto block/MTD/mem device"),
+    (r'\bof=/dev/(sd|nvme|mmcblk|block/|mtd|mem)', "dd/tool write onto block/MTD/mem device"),
+    (r'\b(cp|cat|tee|pv)\b[^|;&]*\s/dev/(sd[a-z]|nvme\d|mmcblk\d|block/|mtd\d|mem\b)',
+     "raw write onto block/MTD/mem device"),
     (r'\bdrop\s+(table|database|schema)\b', "SQL DROP"),
     (r'\btruncate\s+table\b|\bsqlite3\b[^|;&]*\btruncate\b|\bpsql\b[^|;&]*\btruncate\b',
      "SQL TRUNCATE"),
     (r'\bshred\b', "shred (key/credential destruction)"),
     (r'\brm\b[^|;&]*(\.ssh\b|\.secrets\b|\.credentials|id_ed25519|id_rsa|\.token\b)',
      "credential/key material deletion"),
+    # wq#4746 (wq#4744 T1 gap-analysis §2(a)): eFuse burns are one-time and
+    # irreversible — unlike BUILTIN_FLASH below, no verified backup makes a
+    # blown fuse undoable, so this stays unconditional RED regardless of rules.
+    (r'\bespefuse(\.py)?\b[^|;&]*\bburn_\w+\b', "espefuse burn (one-time, irreversible eFuse write)"),
 ]
 
 # RED-conditional "flash" class: blocked UNLESS the compiled rules declare a
@@ -148,6 +152,33 @@ BUILTIN_FLASH = [
     (r'\bedl\b\s+w', "edl write"),
     (r'\badb\b[^|;&]*\bpush\b[^|;&]*\s/(system|vendor|boot)\b', "adb push to system partition"),
     (r'\bflashrom\b[^|;&]*\s-w\b', "flashrom write"),
+    # wq#4746 (wq#4744 T1 gap-analysis §2(a)): MCU/SoC flasher write/erase verbs
+    # missing from this class. Read verbs (read_flash, -r, -U *:r:, --upload, rl,
+    # spinor/spinand read, mtk.py r, nanddump, mtd_debug read, ...) are
+    # deliberately left unmatched so they stay GREEN.
+    (r'\bflashrom\b[^|;&]*\s-E\b', "flashrom erase"),
+    (r'\besptool(\.py)?\b[^|;&]*\b(write_flash|erase_flash|erase_region)\b',
+     "esptool write/erase flash"),
+    (r'\bopenocd\b[^|;&]*\bprogram\b', "openocd program"),
+    (r'\bopenocd\b[^|;&]*\bflash\s+write_image\b', "openocd flash write_image"),
+    (r'\bopenocd\b[^|;&]*\bflash\s+erase_(sector|address)\b', "openocd flash erase"),
+    (r'\bst-flash\b[^|;&]*\b(write|erase)\b', "st-flash write/erase"),
+    (r'\bstm32flash\b[^|;&]*\s-w\b', "stm32flash write"),
+    (r'\bstm32flash\b[^|;&]*\s-[eo]\b', "stm32flash erase"),
+    (r'\bavrdude\b[^|;&]*-U\s*\S*:w:', "avrdude write"),
+    (r'\bavrdude\b[^|;&]*\s-e\b', "avrdude chip erase"),
+    (r'\bdfu-util\b[^|;&]*(-D\b|--download\b)', "dfu-util download (write)"),
+    (r'\b(rkdeveloptool|upgrade_tool)\b[^|;&]*\bwl\b', "rkdeveloptool/upgrade_tool write LBA"),
+    (r'\b(rkdeveloptool|upgrade_tool)\b[^|;&]*\bef\b', "rkdeveloptool/upgrade_tool erase flash"),
+    (r'\b(sunxi-fel|xfel)\b[^|;&]*\bspiflash-write\b', "sunxi-fel/xfel SPI flash write"),
+    (r'\b(sunxi-fel|xfel)\b[^|;&]*\bspi(nor|nand)\s+(write|erase)\b',
+     "sunxi-fel/xfel SPI NOR/NAND write/erase"),
+    (r'\bmtk(\.py)?\b[^|;&]*\s(w|wf|wl)\s', "mtkclient write"),
+    (r'\bmtk(\.py)?\b[^|;&]*\s(e|es)\s', "mtkclient erase"),
+    (r'\bflashcp\b', "flashcp (MTD write)"),
+    (r'\bnandwrite\b', "nandwrite (MTD write)"),
+    (r'\bflash_erase\b', "flash_erase (MTD erase)"),
+    (r'\bmtd_debug\b[^|;&]*\bwrite\b', "mtd_debug write"),
 ]
 
 # AMBER: execute but snapshot first. (kind tags drive snapshot())

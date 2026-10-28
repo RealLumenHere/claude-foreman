@@ -50,6 +50,11 @@ RED_CASES = [
     "shred -u /home/lumen/.secrets/key.token",
     "echo x > /dev/sda",
     "cat img.bin > /dev/mmcblk0",
+    # wq#4746 (wq#4744 T1 gap-analysis §2(a)): /dev/mtd*, /dev/mem raw targets
+    "cat img.bin > /dev/mtd0",
+    "cat payload.bin > /dev/mem",
+    # eFuse burn is unconditional RED (irreversible, no backup helps)
+    "espefuse.py burn_efuse FLASH_CRYPT_CNT 1",
 ]
 
 
@@ -440,6 +445,19 @@ GREEN_CASES = [
     "python3 -m pytest tests/ -x",
     "rm -rf /tmp/scratch/build",
     "fdisk -l",
+    # wq#4746: read-side verbs for the new flasher classes must stay GREEN
+    "esptool.py read_flash 0x0 0x1000 dump.bin",
+    "espefuse.py summary",
+    "st-flash read dump.bin 0x8000000 0x10000",
+    "stm32flash -r dump.bin /dev/ttyUSB0",
+    "avrdude -c usbasp -p m328p -U flash:r:dump.hex:i",
+    "dfu-util -U dump.bin",
+    "rkdeveloptool rl 0x0 0x1000 dump.img",
+    "xfel spinand read 0x0 0x1000 dump.bin",
+    "mtk.py r boot_a dump.img",
+    "flashrom -r dump.bin",
+    "nanddump -f dump.bin /dev/mtd0",
+    "mtd_debug read /dev/mtd0 0 1024 dump.bin",
 ]
 
 
@@ -823,6 +841,62 @@ def test_backup_required_token_ambers_with_local_backup(tmp_path):
                      {ag.GATE_RULES_ENV: out, ag.SNAPDIR_ENV: str(snapdir),
                       "FOREMAN_EVENTS_DIR": str(tmp_path)})
     assert rc == 0, "verified local backup should downgrade flash to AMBER"
+
+
+# ---------------- wq#4746: MCU/SoC flasher write/erase class ----------------
+# gap-analysis.md §2(a): BUILTIN_FLASH lacked these tools' write/erase verbs.
+# Backup-conditional, same as fastboot flash above — RED with no declared
+# backup (default env, no rules file), AMBER once a verified local backup
+# exists (see test_flash_class_ambers_with_local_backup below).
+
+FLASH_CLASS_RED_CASES = [
+    "flashrom -p internal -E",
+    "esptool.py write_flash 0x0 firmware.bin",
+    "esptool.py erase_flash",
+    "openocd -f board.cfg -c 'program firmware.elf verify reset exit'",
+    "openocd -f board.cfg -c 'flash erase_sector 0 0 last'",
+    "st-flash write firmware.bin 0x8000000",
+    "st-flash erase",
+    "stm32flash -w firmware.bin /dev/ttyUSB0",
+    "stm32flash -e 4 /dev/ttyUSB0",
+    "avrdude -c usbasp -p m328p -U flash:w:firmware.hex:i",
+    "avrdude -c usbasp -p m328p -e",
+    "dfu-util -D firmware.bin -a 0",
+    "rkdeveloptool wl 0x0 firmware.img",
+    "rkdeveloptool ef",
+    "upgrade_tool ef",
+    "sunxi-fel spiflash-write 0x0 firmware.bin",
+    "xfel spinand write 0x0 firmware.bin",
+    "mtk.py w boot_a boot_a.img",
+    "mtk.py e boot_a",
+    "flashcp firmware.bin /dev/mtd0",
+    "nandwrite -p /dev/mtd0 firmware.bin",
+    "flash_erase /dev/mtd0 0 0",
+    "mtd_debug write /dev/mtd0 0 1024 firmware.bin",
+]
+
+
+@pytest.mark.parametrize("cmd", FLASH_CLASS_RED_CASES)
+def test_flash_class_red_without_backup(tmp_path, cmd):
+    rc, err = run_hook(bash_payload(cmd), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2, f"flash-class write/erase not blocked without a backup: {cmd}"
+    assert "ACTION BLOCKED" in err
+
+
+def test_flash_class_ambers_with_local_backup(tmp_path):
+    dump = tmp_path / "full_flash.bin"
+    dump.write_bytes(b"\x00" * 1024)
+    yaml_text = MIKO_RULES + f"backups:\n  - {dump}\n"
+    out = compiled(tmp_path, yaml_text)
+    research = tmp_path / "proj" / "research"
+    research.mkdir(parents=True, exist_ok=True)
+    (research / "PRIOR_ART.md").write_text("## finding\nprior art on file\n")
+    snapdir = tmp_path / "snaps"
+    rc, _ = run_hook(bash_payload("esptool.py write_flash 0x0 firmware.bin"),
+                     {ag.GATE_RULES_ENV: out, ag.SNAPDIR_ENV: str(snapdir),
+                      "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, "verified local backup should downgrade flasher write to AMBER"
 
 
 def test_builtins_never_weakened_by_project_rules(tmp_path):
