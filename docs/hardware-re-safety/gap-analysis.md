@@ -203,6 +203,18 @@ during this audit.
 - **T2** Gate hardware MCP tools: a PreToolUse matcher for `mcp__.*` that runs action_gate on
   hardware servers, plus a server-side energize-confirm token in the openocd, flashrom and
   plugin-flashrom MCP servers (hal-spec §9.2a). A boolean the model passes does not count.
+  *Status (wq#4747):* landed. `harness/worker-settings.json`'s PreToolUse matcher is now
+  `Bash|Edit|Write|mcp__.*`, routed to `action_gate.py hook` (`harness/worker-settings.json:147`).
+  `classify_mcp_tool` (`harness/action_gate.py:901-933`) is RED by default for every energizing
+  `mcp__<server>__<tool>` call — openocd `write_target_memory`/`flash_firmware`, flashrom
+  `write_flash`/`erase_chip`, plugin-flashrom's energize ops, and serial-mcp writes — unless an
+  operator-issued token verifies against `harness/energize_confirm.py` (`verify_token`); a
+  model-supplied bool is never accepted. The three MCP servers themselves also refuse locally via
+  `_require_confirm_token` shelling out to `energize_confirm.py verify`
+  (`ops/wq3881-openocd-mcp/server.py:60-72`, `ops/wq3882-limpet-flashrom-mcp-a1/flashrom_ops.py:61-72`,
+  `plugins/limpet-plugin-flashrom/mcp/server.py:51-`), so the gate holds even for a non-hook
+  client. Tests: `harness/tests/test_energize_confirm.py`, `harness/tests/test_action_gate.py -k
+  "mcp or energize or confirm"` (25 passed, 2026-10-28).
 - **T3** Per-target evidence manifest for write-class actions (datasheet ref, flash layout,
   recovery image path plus sha256 verified at hook time). Write-protect known-good dumps. Add
   `.fworker-rules.yaml` with `hardware_class` for the Limpet/Telpo/ESP32 work repos.
