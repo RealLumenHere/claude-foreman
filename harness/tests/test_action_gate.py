@@ -13,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import action_gate as ag
+import energize_confirm as ec
 import read_dir_sweep as _rds
 
 GATE = os.path.join(os.path.dirname(__file__), "..", "action_gate.py")
@@ -30,6 +31,10 @@ def run_hook(payload, env_extra=None):
 
 def bash_payload(cmd, cwd="/tmp"):
     return {"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd}
+
+
+def mcp_payload(tool_name, tool_input=None, cwd="/tmp"):
+    return {"tool_name": tool_name, "tool_input": tool_input or {}, "cwd": cwd}
 
 
 # ---------------- Layer 1: RED blocks, agent-visible message ----------------
@@ -466,6 +471,102 @@ GREEN_CASES = [
 def test_green_passes(cmd):
     rc, err = run_hook(bash_payload(cmd))
     assert rc == 0, f"GREEN blocked: {cmd} :: {err}"
+
+
+# ---------------- mcp__ hardware MCP tools (wq#4747) ------------------------
+# docs/hardware-re-safety/gap-analysis.md (a'): no hook matcher covered mcp__*
+# calls at all. These prove the PreToolUse dispatch for mcp__ tools, and that
+# an energizing capability is RED without a valid operator-issued confirm
+# token (hal-spec.md §9.2a) -- a model-supplied bool is not accepted.
+
+MCP_ENERGIZE_CASES = [
+    ("mcp__openocd__write_target_memory", "openocd.write_target_memory", {"address": 0, "data": [1]}),
+    ("mcp__openocd__flash_firmware", "openocd.flash_firmware", {"image_path": "/tmp/x.bin", "address": 0}),
+    ("mcp__limpet-flashrom__write_flash", "flashrom.write_flash",
+     {"programmer": "ch341a_spi", "input_path": "/tmp/x.bin"}),
+    ("mcp__limpet-flashrom__erase_chip", "flashrom.erase_chip", {"programmer": "ch341a_spi"}),
+    ("mcp__serial-maksoor__write", "serial.write", {"port": "/dev/ttyUSB0", "data": "AT\r\n"}),
+]
+
+
+@pytest.mark.parametrize("tool_name,capability,extra_input", MCP_ENERGIZE_CASES)
+def test_mcp_energize_blocked_without_token(tmp_path, tool_name, capability, extra_input):
+    rc, err = run_hook(mcp_payload(tool_name, extra_input), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "confirm_token" in err
+    assert capability in err
+
+
+@pytest.mark.parametrize("tool_name,capability,extra_input", MCP_ENERGIZE_CASES)
+def test_mcp_energize_allowed_with_valid_token(tmp_path, monkeypatch, tool_name, capability, extra_input):
+    token_dir = str(tmp_path / ".energize-confirm")
+    monkeypatch.setattr(ec, "TOKEN_DIR", token_dir)
+    token = ec.issue_token(capability, _isatty=True)
+    payload_input = dict(extra_input)
+    payload_input["confirm_token"] = token
+    rc, err = run_hook(mcp_payload(tool_name, payload_input), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "ENERGIZE_CONFIRM_DIR": token_dir,
+    })
+    assert rc == 0, err
+
+
+def test_mcp_energize_token_is_single_use_at_the_hook(tmp_path, monkeypatch):
+    token_dir = str(tmp_path / ".energize-confirm")
+    monkeypatch.setattr(ec, "TOKEN_DIR", token_dir)
+    token = ec.issue_token("flashrom.erase_chip", _isatty=True)
+    env = {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+           "ENERGIZE_CONFIRM_DIR": token_dir}
+    payload = mcp_payload("mcp__limpet-flashrom__erase_chip",
+                           {"programmer": "ch341a_spi", "confirm_token": token})
+    rc1, err1 = run_hook(payload, env)
+    rc2, err2 = run_hook(payload, env)  # replay the same token
+    assert rc1 == 0, err1
+    assert rc2 == 2
+    assert "confirm_token" in err2
+
+
+def test_mcp_non_hardware_tool_is_green(tmp_path):
+    rc, err = run_hook(mcp_payload("mcp__keenable__search_web_pages", {"query": "x"}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, err
+
+
+def test_mcp_hardware_read_only_tool_is_green(tmp_path):
+    rc, err = run_hook(mcp_payload("mcp__openocd__read_target_memory", {"address": 0}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, err
+
+
+def test_mcp_serial_list_ports_is_green(tmp_path):
+    rc, err = run_hook(mcp_payload("mcp__serial-maksoor__list_ports", {}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, err
+
+
+def test_mcp_serial_unclassified_tool_defaults_to_red(tmp_path):
+    # hal-spec.md §9.2a: an unconfirmed/unclassified capability defaults to
+    # energizing. serial-mcp is a pinned third-party binary with no source in
+    # this repo, so a tool name this gate has never seen (not "write", not
+    # anything on SERIAL_MCP_READ_ONLY_TOOLS) must fail closed, not open.
+    rc, err = run_hook(mcp_payload("mcp__serial-maksoor__some_future_tool", {"port": "/dev/ttyUSB0"}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "confirm_token" in err
+
+
+def test_mcp_energize_red_is_never_judge_overridden(tmp_path):
+    # hal-spec.md §9.1: this policy "cannot be overridden ... by prompt
+    # engineering" -- the mcp__ RED path returns before enforce_judge_verdict,
+    # so FOREMAN_JUDGE_ENFORCE=1 changes nothing even with a judge that would
+    # rubber-stamp anything.
+    rc, err = run_hook(mcp_payload("mcp__openocd__write_target_memory", {"address": 0, "data": [1]}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": "/bin/true",
+    })
+    assert rc == 2
+    assert "confirm_token" in err
 
 
 # ---------------- Layer 1: AMBER snapshots, fail-closed on snapshot error ----

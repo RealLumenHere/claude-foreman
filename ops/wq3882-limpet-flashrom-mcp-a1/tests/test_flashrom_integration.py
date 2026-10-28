@@ -22,6 +22,12 @@ ops = importlib.util.module_from_spec(_spec)
 sys.modules["flashrom_ops_integration"] = ops
 _spec.loader.exec_module(ops)
 
+_ENERGIZE_CONFIRM_PATH = Path(__file__).resolve().parents[3] / "harness" / "energize_confirm.py"
+_ec_spec = importlib.util.spec_from_file_location("energize_confirm_integration", _ENERGIZE_CONFIRM_PATH)
+energize_confirm = importlib.util.module_from_spec(_ec_spec)
+sys.modules["energize_confirm_integration"] = energize_confirm
+_ec_spec.loader.exec_module(energize_confirm)
+
 pytestmark = pytest.mark.skipif(
     shutil.which("flashrom") is None, reason="flashrom binary not installed"
 )
@@ -37,13 +43,23 @@ def test_detect_chip_real_binary():
     ]
 
 
-def test_read_write_verify_round_trip_real_binary(tmp_path):
+def test_read_write_verify_round_trip_real_binary(tmp_path, monkeypatch):
     dump = tmp_path / "full.bin"
     read_result = ops.read_flash(PROGRAMMER, str(dump))
     assert read_result["ok"] is True
     assert dump.stat().st_size == 16384 * 1024
 
-    write_result = ops.write_flash(PROGRAMMER, str(dump))
+    # wq#4747: write_flash now refuses without a real operator-issued confirm
+    # token. Mint one end-to-end (no mocking) against this worktree's own
+    # energize_confirm.py, in a scratch token dir so this test never touches
+    # the live ~/re/.energize-confirm store.
+    token_dir = str(tmp_path / ".energize-confirm")
+    monkeypatch.setenv("ENERGIZE_CONFIRM_DIR", token_dir)  # read by the verify subprocess
+    monkeypatch.setattr(energize_confirm, "TOKEN_DIR", token_dir)  # read in-process below
+    monkeypatch.setattr(ops, "ENERGIZE_CONFIRM_SCRIPT", _ENERGIZE_CONFIRM_PATH)
+    token = energize_confirm.issue_token("flashrom.write_flash", _isatty=True)
+
+    write_result = ops.write_flash(PROGRAMMER, str(dump), confirm_token=token)
     assert write_result["ok"] is True
 
     verify_result = ops.verify_flash(PROGRAMMER, str(dump))

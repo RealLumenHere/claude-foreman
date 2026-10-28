@@ -12,9 +12,9 @@ write/verify/erase against a backed-up image.
 | `identify_programmer` | — | delegates to the LIMPET HAL (`ops/wq3809-limpet-hal/hal.py detect`, filtered to `hw_type="flash_programmer"`) instead of re-deriving USB VID:PID signatures here |
 | `detect_chip(programmer, chip="")` | none (flashrom's default: probe only) | run first; parses `Found <vendor> flash chip "<name>" (<N> kB, <bus>)` lines out of stdout |
 | `read_flash(programmer, output_path, chip="", region="", layout_file="")` | `-r` (`-l`/`-i` for `region`) | creates `output_path`'s parent dir; `region` requires `layout_file` (flashrom rejects `-i` without a layout source — raises `FlashromError` locally otherwise); always do this before write/erase |
-| `write_flash(programmer, input_path, chip="", verify=True)` | `-w` (`-n` if `verify=False`) | requires `input_path` to already exist |
+| `write_flash(programmer, input_path, confirm_token="", chip="", verify=True)` | `-w` (`-n` if `verify=False`) | requires `input_path` to already exist; **energizing (hal-spec.md §9.2a) — refuses without a valid operator-issued `confirm_token`**, wq#4747 |
 | `verify_flash(programmer, input_path, chip="")` | `-v` | requires `input_path` to already exist |
-| `erase_chip(programmer, confirm=False, chip="")` | `-E` | **refuses unless `confirm=True`** — destructive, no undo without a prior `read_flash` |
+| `erase_chip(programmer, confirm_token="", chip="")` | `-E` | **energizing (hal-spec.md §9.2a) — refuses without a valid operator-issued `confirm_token`**, destructive, no undo without a prior `read_flash`. A model-supplied bool no longer counts (wq#4747, was `confirm=True`) — mint one with `python3 harness/energize_confirm.py issue flashrom.erase_chip` from an interactive terminal. |
 
 Every call is `subprocess.run([...], shell=False)` with an argv list — a `programmer` or
 path string can't break out of its argument position. A nonzero flashrom exit is

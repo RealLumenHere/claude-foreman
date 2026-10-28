@@ -39,3 +39,26 @@ def test_initialized_notification():
 def test_unknown_method():
     resp = server.handle_request({"jsonrpc": "2.0", "id": 5, "method": "foo/bar", "params": {}})
     assert "error" in resp
+
+
+def test_flashrom_write_refuses_without_confirm_token():
+    resp = server.handle_request({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {
+        "name": "flashrom_write", "arguments": {"programmer": "ch341a_spi", "image_path": "/tmp/x.bin"}}})
+    assert resp["result"]["isError"] is True
+    assert "confirm_token" in resp["result"]["content"][0]["text"]
+
+
+def test_flashrom_erase_refuses_without_confirm_token():
+    resp = server.handle_request({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {
+        "name": "flashrom_erase", "arguments": {"programmer": "ch341a_spi"}}})
+    assert resp["result"]["isError"] is True
+    assert "confirm_token" in resp["result"]["content"][0]["text"]
+
+
+def test_flashrom_write_runs_with_valid_confirm_token(monkeypatch):
+    monkeypatch.setattr(server, "_verify_confirm_token", lambda capability, token: True)
+    monkeypatch.setattr(server, "_run_flashrom", lambda *args, **kw: {"exit_code": 0})
+    resp = server.handle_request({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
+        "name": "flashrom_write",
+        "arguments": {"programmer": "ch341a_spi", "image_path": __file__, "confirm_token": "tok"}}})
+    assert resp["result"].get("isError") is not True

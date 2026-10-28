@@ -54,12 +54,15 @@ def read_flash(
 
 
 @mcp.tool()
-def write_flash(programmer: str, input_path: str, chip: str = "", verify: bool = True) -> dict:
+def write_flash(programmer: str, input_path: str, confirm_token: str = "",
+                 chip: str = "", verify: bool = True) -> dict:
     """Write `input_path` to the flash chip attached via `programmer`. Verifies against
     the written image automatically unless `verify=False` (flashrom's -n/--noverify).
     Read the chip first (read_flash) and keep that backup — this overwrites the chip.
+    Energizing (hal-spec.md §9.2a): requires `confirm_token` from an operator-run
+    `energize_confirm.py issue flashrom.write_flash`.
     """
-    return ops.write_flash(programmer, input_path, chip, verify)
+    return ops.write_flash(programmer, input_path, confirm_token, chip, verify)
 
 
 @mcp.tool()
@@ -70,12 +73,14 @@ def verify_flash(programmer: str, input_path: str, chip: str = "") -> dict:
 
 
 @mcp.tool()
-def erase_chip(programmer: str, confirm: bool = False, chip: str = "") -> dict:
+def erase_chip(programmer: str, confirm_token: str = "", chip: str = "") -> dict:
     """Erase the flash chip attached via `programmer` (flashrom's -E). DESTRUCTIVE and
-    irreversible without a prior backup: refuses to run unless `confirm=True` is passed
-    explicitly. Read the chip first (read_flash) — there is no undo.
+    irreversible without a prior backup. Energizing (hal-spec.md §9.2a): refuses without
+    `confirm_token` from an operator-run `energize_confirm.py issue flashrom.erase_chip`
+    -- `confirm=True` from the calling model no longer counts. Read the chip first
+    (read_flash) — there is no undo.
     """
-    return ops.erase_chip(programmer, confirm, chip)
+    return ops.erase_chip(programmer, confirm_token, chip)
 
 
 @mcp.tool()

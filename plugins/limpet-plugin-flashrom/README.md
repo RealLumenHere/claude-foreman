@@ -31,6 +31,13 @@ The agent workflow for flash operations:
 4. Only then: `flashrom_write` (energize-gated)
 5. `flashrom_verify` — confirm the write
 
+`flashrom_write`/`flashrom_erase` require a `confirm_token` minted by an operator
+(`python3 harness/energize_confirm.py issue flashrom.write_flash` /
+`flashrom.erase_chip`, run from an interactive terminal — it refuses otherwise, so
+a headless/agent session can't mint its own). Before wq#4747 these tools said
+"REQUIRES energize-confirm gate" in their docstrings but enforced nothing; the gate
+is real now, and a model-supplied bool does not satisfy it (hal-spec.md §9.2a).
+
 ## License
 
 GPL-2.0-only (flashrom upstream)

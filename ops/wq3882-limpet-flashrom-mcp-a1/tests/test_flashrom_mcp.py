@@ -5,8 +5,11 @@ pip-installed in this build lane (same split ops/wq1151-lumen-kb uses for the sa
 reason). No real flashrom binary or hardware is exercised: subprocess.run is
 monkeypatched to a fake that records the argv it was given and returns a canned
 flashrom-shaped CompletedProcess, so these assert on what gets executed (and that
-destructive ops refuse without confirm=True), not on live hardware behaviour this
-sandbox cannot provide.
+destructive ops refuse without an operator-issued confirm_token, wq#4747), not on
+live hardware behaviour this sandbox cannot provide. The `confirmed` fixture mocks
+_verify_confirm_token (not subprocess.run) so these argv-focused tests don't also
+exercise the real energize_confirm.py subprocess call — that gets its own coverage
+in harness/tests/test_energize_confirm.py and the real-binary round trip below.
 """
 from __future__ import annotations
 
@@ -47,6 +50,13 @@ def fake_run(monkeypatch):
     return calls
 
 
+@pytest.fixture
+def confirmed(monkeypatch):
+    """wq#4747: stand in for a valid operator-issued confirm_token without going
+    through the real energize_confirm.py subprocess call."""
+    monkeypatch.setattr(ops, "_verify_confirm_token", lambda capability, token: True)
+
+
 def test_detect_chip_builds_argv_and_parses_chip(fake_run):
     result = ops.detect_chip("ch341a_spi")
     assert fake_run[0] == [ops.FLASHROM_BIN, "-p", "ch341a_spi"]
@@ -85,24 +95,37 @@ def test_read_flash_with_region_and_layout(fake_run, tmp_path):
     ]
 
 
-def test_write_flash_requires_existing_file(fake_run, tmp_path):
+def test_write_flash_refuses_without_confirm_token(fake_run):
+    with pytest.raises(ops.FlashromError, match="confirm_token"):
+        ops.write_flash("ch341a_spi", "/nonexistent/doesnt-matter.bin")
+    assert fake_run == []  # the refusal must happen before any subprocess call
+
+
+def test_write_flash_rejects_invalid_confirm_token(fake_run, monkeypatch):
+    monkeypatch.setattr(ops, "_verify_confirm_token", lambda capability, token: False)
+    with pytest.raises(ops.FlashromError, match="invalid or expired"):
+        ops.write_flash("ch341a_spi", "/nonexistent/doesnt-matter.bin", confirm_token="bogus")
+    assert fake_run == []
+
+
+def test_write_flash_requires_existing_file(fake_run, confirmed, tmp_path):
     missing = tmp_path / "nope.bin"
     with pytest.raises(FileNotFoundError):
-        ops.write_flash("ch341a_spi", str(missing))
+        ops.write_flash("ch341a_spi", str(missing), confirm_token="tok")
     assert fake_run == []  # never shelled out for a file that doesn't exist
 
 
-def test_write_flash_default_verifies(fake_run, tmp_path):
+def test_write_flash_default_verifies(fake_run, confirmed, tmp_path):
     src = tmp_path / "image.bin"
     src.write_bytes(b"\xff" * 16)
-    ops.write_flash("ch341a_spi", str(src))
+    ops.write_flash("ch341a_spi", str(src), confirm_token="tok")
     assert fake_run[0] == [ops.FLASHROM_BIN, "-p", "ch341a_spi", "-w", str(src)]
 
 
-def test_write_flash_noverify_appends_flag(fake_run, tmp_path):
+def test_write_flash_noverify_appends_flag(fake_run, confirmed, tmp_path):
     src = tmp_path / "image.bin"
     src.write_bytes(b"\xff" * 16)
-    ops.write_flash("ch341a_spi", str(src), verify=False)
+    ops.write_flash("ch341a_spi", str(src), confirm_token="tok", verify=False)
     assert fake_run[0] == [ops.FLASHROM_BIN, "-p", "ch341a_spi", "-w", str(src), "-n"]
 
 
@@ -120,14 +143,21 @@ def test_verify_flash_argv(fake_run, tmp_path):
     assert fake_run[0] == [ops.FLASHROM_BIN, "-p", "ch341a_spi", "-v", str(src)]
 
 
-def test_erase_chip_refuses_without_confirm(fake_run):
-    with pytest.raises(ops.FlashromError, match="confirm=True"):
+def test_erase_chip_refuses_without_confirm_token(fake_run):
+    with pytest.raises(ops.FlashromError, match="confirm_token"):
         ops.erase_chip("ch341a_spi")
     assert fake_run == []  # the refusal must happen before any subprocess call
 
 
-def test_erase_chip_runs_with_confirm(fake_run):
-    result = ops.erase_chip("ch341a_spi", confirm=True)
+def test_erase_chip_rejects_invalid_confirm_token(fake_run, monkeypatch):
+    monkeypatch.setattr(ops, "_verify_confirm_token", lambda capability, token: False)
+    with pytest.raises(ops.FlashromError, match="invalid or expired"):
+        ops.erase_chip("ch341a_spi", confirm_token="bogus")
+    assert fake_run == []
+
+
+def test_erase_chip_runs_with_valid_confirm_token(fake_run, confirmed):
+    result = ops.erase_chip("ch341a_spi", confirm_token="tok")
     assert fake_run[0] == [ops.FLASHROM_BIN, "-p", "ch341a_spi", "-E"]
     assert result["ok"] is True
 

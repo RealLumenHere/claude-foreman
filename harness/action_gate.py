@@ -38,6 +38,11 @@ try:  # credential shapes — one list, two consumers (read_dir_sweep is the own
 except Exception:  # never let a sibling import break a fail-closed hook
     _rds = None
 
+try:  # wq#4747: operator-issued energize-confirm tokens for hardware mcp__ tools
+    import energize_confirm as _energize
+except Exception:  # fail-closed below treats "can't verify" as "not verified"
+    _energize = None
+
 GATE_RULES_ENV = "FOREMAN_GATE_RULES"
 SNAPDIR_ENV = "FOREMAN_GATE_SNAPDIR"
 HANDOFF_ENV = "FOREMAN_GATE_HANDOFF_DIR"
@@ -861,6 +866,75 @@ def classify_file_tool(tool_name, file_path, rules):
     return "GREEN", "", None, False
 
 
+# wq#4747 (docs/hardware-re-safety/gap-analysis.md (a')): mcp__<server>__<tool>
+# calls reach no hook at all today. This table names the hardware MCP tools
+# that *energize* a target (hal-spec.md §9.2a) — write memory over JTAG, flash
+# firmware, write/erase a flash chip — keyed by a case-insensitive substring of
+# the server name so renamed/relocated server instances (e.g. a second
+# openocd-mcp registration) still match. Each maps to a capability string the
+# confirm token must have been issued for. openocd/flashrom are in-repo
+# (ops/wq3881-openocd-mcp, ops/wq3882-limpet-flashrom-mcp-a1,
+# plugins/limpet-plugin-flashrom) so every tool name here is read straight from
+# their source, not guessed.
+HARDWARE_ENERGIZE_MCP_TOOLS = {
+    "openocd": {
+        "write_target_memory": "openocd.write_target_memory",
+        "flash_firmware": "openocd.flash_firmware",
+    },
+    "flashrom": {
+        "write_flash": "flashrom.write_flash",
+        "erase_chip": "flashrom.erase_chip",
+    },
+}
+
+# wq#4513's serial-mcp is a pinned third-party binary (github.com/qarnet/serial-mcp)
+# with no source in this repo, so its exact tool names ("write/DTR/RTS/BREAK" per
+# ops/wq4513-serial-mcp-maksoor/README.md) can't be read and confirmed here the way
+# openocd/flashrom's can. Guessing exact energizing names and defaulting every other
+# serial tool to GREEN would repeat this ticket's own premise -- a hardware MCP tool
+# nobody classified reaching no gate. hal-spec.md §9.2a instead: "a missing or
+# ambiguous classification defaults to energizing, never read_only" -- so every
+# serial-mcp tool is RED unless it's on this small, read-only allowlist.
+SERIAL_MCP_READ_ONLY_TOOLS = {"list_ports", "list_profiles", "get_profile"}
+
+
+def classify_mcp_tool(tool_name, tool_input):
+    """RED unless a valid operator-issued confirm token (energize_confirm.py,
+    not a model-supplied bool) is present for an energizing hardware action."""
+    parts = tool_name.split("__", 2)
+    if len(parts) != 3:
+        return "GREEN", "", None
+    _, server, fn = parts
+    server_l = server.lower()
+    token = (tool_input or {}).get("confirm_token") or ""
+
+    if "serial" in server_l:
+        if fn in SERIAL_MCP_READ_ONLY_TOOLS:
+            return "GREEN", "", None
+        capability = f"serial.{fn}"
+        if _energize is not None and _energize.verify_token(token, capability):
+            return "GREEN", "", None
+        return ("RED", f"{tool_name} is on an unauthenticated serial-mcp server "
+                f"with no confirmed read-only classification for '{fn}' — "
+                f"hal-spec.md §9.2a defaults an unclassified capability to "
+                f"energizing, so it requires a valid operator-issued confirm_token "
+                f"(capability={capability})", None)
+
+    for key, tools in HARDWARE_ENERGIZE_MCP_TOOLS.items():
+        if key not in server_l:
+            continue
+        capability = tools.get(fn)
+        if not capability:
+            continue
+        if _energize is not None and _energize.verify_token(token, capability):
+            return "GREEN", "", None
+        return ("RED", f"{tool_name} is an energizing hardware action "
+                f"(capability={capability}) and requires a valid operator-issued "
+                f"confirm_token (hal-spec.md §9.2a) — a model-supplied bool is "
+                f"not accepted", None)
+    return "GREEN", "", None
+
+
 # --------------------------------------------------------------------------
 # AMBER snapshots — pre-image BEFORE execution; failure BLOCKS (fail-closed)
 # --------------------------------------------------------------------------
@@ -1485,6 +1559,19 @@ def hook_main():
             verdict, reason, snap, hw_floor = classify_file_tool(
                 tool_name, ti.get("file_path") or "", rules)
             detail = ti.get("file_path") or ""
+        elif tool_name.startswith("mcp__"):
+            # wq#4747: a missing/invalid energize-confirm token is a hard deny with
+            # no judge override — hal-spec.md §9.1 says this policy "cannot be
+            # overridden ... by prompt engineering", so this class never reaches
+            # enforce_judge_verdict/shadow_judge below.
+            verdict, reason, _snap = classify_mcp_tool(tool_name, ti)
+            if verdict == "RED":
+                handoff = write_red_handoff(tool_name, tool_name, reason, rules)
+                _log_event("gate_red_block", reason=reason, snippet=tool_name[:200],
+                            handoff=handoff)
+                print(f"{RED_MSG} ({reason})", file=sys.stderr)
+                return 2
+            return 0
         else:
             return 0  # Read etc — GREEN by definition here; guard.sh owns its own denials
         if verdict == "RED":

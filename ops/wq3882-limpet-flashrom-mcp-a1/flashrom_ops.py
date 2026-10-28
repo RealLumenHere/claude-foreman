@@ -25,6 +25,14 @@ HAL_SCRIPT = Path(os.environ.get(
     "LIMPET_HAL_SCRIPT", "/home/lumen/foreman/ops/wq3809-limpet-hal/hal.py"
 ))
 
+# wq#4747 (hal-spec.md §9.2a): write_flash/erase_chip energize the target, so they
+# refuse without an operator-issued confirm token, verified by shelling out to
+# energize_confirm.py -- same cross-ops-bundle subprocess pattern as HAL_SCRIPT above,
+# so this server stays runnable on a host without the rest of the harness tree.
+ENERGIZE_CONFIRM_SCRIPT = Path(os.environ.get(
+    "ENERGIZE_CONFIRM_SCRIPT", "/home/lumen/foreman/harness/energize_confirm.py"
+))
+
 CHIP_LINE_RE = re.compile(
     r'Found\s+(?P<vendor>\S+)\s+flash chip\s+"(?P<chip>[^"]+)"\s+'
     r'\((?P<size_kb>\d+)\s*kB,\s*(?P<bus>[^)]+)\)',
@@ -34,6 +42,34 @@ CHIP_LINE_RE = re.compile(
 
 class FlashromError(RuntimeError):
     pass
+
+
+def _verify_confirm_token(capability: str, confirm_token: str) -> bool:
+    """Shell out to energize_confirm.py's verifier. Split out from
+    _require_confirm_token so tests can mock this one call without also faking
+    every other subprocess.run in this module (the flashrom invocations)."""
+    try:
+        rc = subprocess.run(
+            [sys.executable, str(ENERGIZE_CONFIRM_SCRIPT), "verify", capability, confirm_token],
+            capture_output=True, timeout=10,
+        ).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return False  # verifier unreachable -- fail closed, never fail open
+    return rc == 0
+
+
+def _require_confirm_token(capability: str, confirm_token: str) -> None:
+    """Refuse `capability` unless `confirm_token` was minted by an operator
+    (energize_confirm.issue_token, which refuses outside a real TTY). A bool the
+    calling model passes does not count (hal-spec.md §9.2a)."""
+    if not confirm_token:
+        raise FlashromError(
+            f"{capability} refused: missing confirm_token (operator-issued -- run "
+            f"'python3 {ENERGIZE_CONFIRM_SCRIPT} issue {capability}' from an "
+            "interactive terminal, not from this agent session)"
+        )
+    if not _verify_confirm_token(capability, confirm_token):
+        raise FlashromError(f"{capability} refused: invalid or expired confirm_token")
 
 
 def _run(args: list[str], timeout: int) -> dict:
@@ -109,9 +145,12 @@ def read_flash(
     return result
 
 
-def write_flash(programmer: str, input_path: str, chip: str = "", verify: bool = True) -> dict:
+def write_flash(programmer: str, input_path: str, confirm_token: str = "",
+                 chip: str = "", verify: bool = True) -> dict:
     """Write `input_path` to the flash chip attached via `programmer`. Verifies
-    automatically unless `verify=False` (flashrom's -n/--noverify)."""
+    automatically unless `verify=False` (flashrom's -n/--noverify). Energizing
+    (hal-spec.md §9.2a): refuses without an operator-issued `confirm_token`."""
+    _require_confirm_token("flashrom.write_flash", confirm_token)
     src = Path(input_path)
     if not src.is_file():
         raise FileNotFoundError(f"no such file: {input_path}")
@@ -131,14 +170,11 @@ def verify_flash(programmer: str, input_path: str, chip: str = "") -> dict:
     return _run(args, DEFAULT_TIMEOUT_SEC)
 
 
-def erase_chip(programmer: str, confirm: bool = False, chip: str = "") -> dict:
-    """Erase the flash chip attached via `programmer` (flashrom's -E). Refuses to run
-    unless `confirm=True` is passed explicitly."""
-    if not confirm:
-        raise FlashromError(
-            "erase_chip refused: pass confirm=True to actually erase "
-            "(no undo without a prior read_flash backup)"
-        )
+def erase_chip(programmer: str, confirm_token: str = "", chip: str = "") -> dict:
+    """Erase the flash chip attached via `programmer` (flashrom's -E). Energizing
+    and irreversible without a prior backup (hal-spec.md §9.2a): refuses without
+    an operator-issued `confirm_token` -- a model-supplied bool does not count."""
+    _require_confirm_token("flashrom.erase_chip", confirm_token)
     args = _programmer_args(programmer, chip) + ["-E"]
     return _run(args, ERASE_TIMEOUT_SEC)
 

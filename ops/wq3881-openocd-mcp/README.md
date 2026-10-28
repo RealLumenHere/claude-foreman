@@ -38,8 +38,8 @@ addr-prefixed hex dump that would need its own parser.
 | `resume_target(address?)` | `resume [address]` |
 | `reset_target(mode)` | `reset {run,halt,init}` |
 | `read_target_memory(address, width, count, phys?)` | `read_memory` |
-| `write_target_memory(address, data, width, phys?)` | `write_memory` |
-| `flash_firmware(image_path, address, erase?, verify?)` | `flash write_image` (+ `verify_image`) |
+| `write_target_memory(address, data, confirm_token="", width, phys?)` | `write_memory` — **energizing (hal-spec.md §9.2a), refuses without a valid operator-issued `confirm_token`**, wq#4747 |
+| `flash_firmware(image_path, address, confirm_token="", erase?, verify?)` | `flash write_image` (+ `verify_image`) — **energizing, same confirm_token gate** |
 | `scan_jtag_chain()` | `scan_chain`, parsed into one dict per TAP |
 | `jtag_tap_names()` | `jtag names` |
 | `boundary_scan(tap, ir_value, dr_length)` | `irscan` then `drscan` |
