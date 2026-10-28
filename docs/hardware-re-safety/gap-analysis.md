@@ -211,5 +211,10 @@ during this audit.
   guard deny on nested Claude launches with hook-dropping flags or env, and an audit of the
   user-level settings and hooks for interactive `/home/lumen/re` sessions (needs a read grant on
   `~/.claude/settings.json` with masking).
+  *Status (wq#4749):* the settings key and the guard.sh deny have landed
+  (`harness/tests/test_wq4749_nested_hookless_launch.py`). A worker cannot run the audit:
+  `capability_lint.DIR_DENY_PREFIXES` refuses a `/home/lumen/.claude` grant and guard.sh denies
+  `*/.claude/*` reads. `harness/claude_settings_audit.py` is the masked audit tool, and running
+  it on Lumen is a follow-up for the orchestrator lane.
 - **T6** Squidbrake observe-mode pilot for interactive RE sessions with a hardware `rules.yaml`
   (depends on T2).

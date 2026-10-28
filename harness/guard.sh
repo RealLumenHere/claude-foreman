@@ -165,6 +165,39 @@ Bash)
     fi
   done
 
+  # ---- wq#4749 (wq#4744 T5, docs/hardware-re-safety/gap-analysis.md §4): no nested
+  # hookless Claude session ----
+  # This hook, and every other user/project hook, does not load in a Claude CLI started
+  # with --safe-mode, --restricted or --bare, or with CLAUDE_CODE_SAFE_MODE /
+  # CLAUDE_CODE_RESTRICTED set (cc-safe-setup's measured table), and disableAllHooks
+  # turns them off from a settings file or --settings JSON. `node *` and `npx *` are
+  # allowlisted, so a worker could start such a child and run anything in it unguarded.
+  # The skip-permissions flag and the bypass permission mode are denied here too: a
+  # nested child does not load worker-settings.json, so its disableBypassPermissionsMode
+  # covers only this session. The regexes split those two literals because
+  # tests/test_settings_lint.py bans them inside harness/.
+  # --bare is denied only next to a claude/node/npx/bun/deno launch, since
+  # `git clone --bare` and `git init --bare` are ordinary. The other markers are denied
+  # anywhere: no fleet tool uses them, and a dequoted copy of each target closes the
+  # `"CLAUDE_CODE_SAFE""_MODE=1"` split. Prose goes through the wq/issue-log exemption
+  # above or a --body-file. Residual: a launcher script that adds the flag itself, or a
+  # settings file written first and passed by path, is not visible to a string scan.
+  CC_LAUNCH_RE='claude|(^|[^[:alnum:]_.-])(node|npx|bunx?|deno)([^[:alnum:]_.-]|$)'
+  for target in "${VERB_SCAN_TARGETS[@]}"; do
+    for t in "$target" "$(printf '%s' "$target" | tr -d "\"'\\\\")"; do
+      if printf '%s' "$t" | grep -qE 'CLAUDE_CODE_(SAFE_MODE|RESTRICTED)|disableAllHooks'; then
+        block "hook-dropping Claude env/setting denied (CLAUDE_CODE_SAFE_MODE/CLAUDE_CODE_RESTRICTED/disableAllHooks; wq#4749). Search for the name with the Grep tool instead" "$RAW_CMD"
+      fi
+      if printf '%s' "$t" | grep -qE -- '--(safe-mode|restricted)([^[:alnum:]_-]|$)|dangerously-skip-perm|bypas[s]Permissions'; then
+        block "hook-dropping or bypass Claude launch flag denied (--safe-mode/--restricted/skip-permissions/bypass mode; wq#4749)" "$RAW_CMD"
+      fi
+      if printf '%s' "$t" | grep -qE -- '--bare([^[:alnum:]_-]|$)' \
+          && printf '%s' "$t" | grep -qiE "$CC_LAUNCH_RE"; then
+        block "nested Claude/node launch with --bare denied (skips hooks; wq#4749)" "$RAW_CMD"
+      fi
+    done
+  done
+
   # ---- wq#4550 (duplicate report: wq#4551), widened by wq#4568 ----
   # RealLumenHere/ccc is a public GitHub mirror of a Class C, never-public repo
   # (agent-scope.conf has no ALLOW for it — lumen/ccc's ALLOW line explicitly

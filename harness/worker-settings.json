@@ -1,6 +1,7 @@
 {
   "permissions": {
     "defaultMode": "acceptEdits",
+    "disableBypassPermissionsMode": "disable",
     "allow": [
       "Read",
       "Grep",
