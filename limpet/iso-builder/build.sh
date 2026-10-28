@@ -382,6 +382,15 @@ stage3_inject_limpet_packages() {
   cp -a "$HERE/overlay/." "$CHROOT/"
   chmod +x "$CHROOT"/opt/limpet/panel/*.sh 2>/dev/null || true
 
+  # wq#4525: overlay/ and the chroot drifted apart silently once before (desktop
+  # entries + genmon scripts shipped under different names than this stage
+  # injected). Fail loudly here instead of shipping an ISO with a half-copied
+  # overlay.
+  while IFS= read -r -d '' src; do
+    rel="${src#"$HERE"/overlay/}"
+    [ -e "$CHROOT/$rel" ] || fail "stage3: overlay file $rel did not land in chroot (cp -a above silently dropped it)"
+  done < <(find "$HERE/overlay" -type f -print0)
+
   # limpet-tools CLI + registry + HAL daemon + MCP meta-server: the real
   # component code, not a reference to where it lives.
   mkdir -p "$CHROOT/opt/limpet/lib"
