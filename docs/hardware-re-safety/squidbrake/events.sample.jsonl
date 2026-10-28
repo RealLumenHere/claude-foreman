@@ -1,0 +1,18 @@
+# Sample Squidbrake observe-mode event log (JSON Lines). Committed fixture: documents the
+# log format and pins observe_report.py's expected classification (see tests/).
+# Lines starting with '#' and blank lines are ignored by observe_report.read_log.
+{"ts": "2026-10-28T10:00:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__openocd__flash_firmware", "operator": {"verdict": "denied", "note": "wrong image selected"}}
+{"ts": "2026-10-28T10:01:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__openocd__read_target_memory"}
+{"ts": "2026-10-28T10:02:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__limpet-flashrom__write_flash", "operator": {"verdict": "legit", "note": "intended reflash"}}
+{"ts": "2026-10-28T10:03:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__limpet-flashrom__read_flash"}
+{"ts": "2026-10-28T10:04:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__serial-maksoor__list_ports"}
+{"ts": "2026-10-28T10:05:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__serial-maksoor__send", "operator": {"verdict": "benign", "note": "echo probe, non-energizing"}}
+{"ts": "2026-10-28T10:06:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__serial-maksoor__flush", "operator": {"verdict": "benign", "note": "unknown tool, defaulted to hold"}}
+{"ts": "2026-10-28T10:07:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__sigrok__capture"}
+{"ts": "2026-10-28T10:08:00Z", "session_cwd": "/home/lumen/re", "command": "flashrom -p ch341a_spi -w fw.bin"}
+{"ts": "2026-10-28T10:09:00Z", "session_cwd": "/home/lumen/re", "command": "flashrom -p ch341a_spi -r dump.bin"}
+{"ts": "2026-10-28T10:10:00Z", "session_cwd": "/home/lumen/re", "command": "espefuse.py burn_efuse FLASH_CRYPT_CNT"}
+{"ts": "2026-10-28T10:11:00Z", "session_cwd": "/home/lumen/re", "command": "ls -la /dev/ttyUSB0"}
+{"ts": "2026-10-28T10:12:00Z", "session_cwd": "/home/lumen/work", "mcp_tool": "mcp__openocd__flash_firmware", "note": "in-scope via hardware MCP even though cwd is outside /re"}
+{"ts": "2026-10-28T10:13:00Z", "session_cwd": "/home/lumen/work", "command": "flashrom -p ch341a_spi -w fw.bin", "note": "out of scope: no /re cwd, no hardware MCP on this event"}
+{"ts": "2026-10-28T10:14:00Z", "session_cwd": "/home/lumen/re", "mcp_tool": "mcp__openocd__flash_firmware", "headless_fworker": true, "note": "excluded: headless, no human approver"}

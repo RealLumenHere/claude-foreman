@@ -535,7 +535,7 @@ stage4b_build_cargo_tools() {
     # existing target ("Already exists") instead of GNU's silent overwrite,
     # which kills this script under set -euo pipefail on a re-run.
     rm -f "$CHROOT/usr/local/bin/$bin"
-    rm -f "$CHROOT/usr/local/bin/$bin" 2>/dev/null; install -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
+    gnuinstall -m 0755 "$out/bin/$bin" "$CHROOT/usr/local/bin/$bin"
     log "stage4b: installed /usr/local/bin/$bin ($(sha256sum "$out/bin/$bin" | cut -c1-16)...)"
   done < <(jq -c '.cargo_crates[]' "$manifest")
 }
@@ -574,6 +574,8 @@ stage4c_build_pip_tools() {
     # creates, so building under /out/usr/local/... and then cp -a'ing into $CHROOT left
     # every console script pointing at an interpreter under a nonexistent /out tree.
     docker run --rm \
+      -e PIPX_HOME=/usr/local/share/pipx \
+      -e PIPX_BIN_DIR=/usr/local/bin \
       -v "$out/usr/local/share/pipx:/usr/local/share/pipx" \
       -v "$out/usr/local/bin:/usr/local/bin" \
       "ubuntu:$XUBUNTU_VERSION" bash -euc "
@@ -918,7 +920,7 @@ install_live_test_ssh() {
     # casper creates the live user from /etc/skel at boot, so the key rides along whatever
     # username that is (ubuntu per the base casper.conf; not hardcoded here).
     install -d -m 0700 "$ov/etc/skel/.ssh"
-    install -m 0600 "$pubkey" "$ov/etc/skel/.ssh/authorized_keys"
+    gnuinstall -m 0600 "$pubkey" "$ov/etc/skel/.ssh/authorized_keys"
     systemctl --root="$ov" enable ssh.service
   )
   rc=$?
@@ -979,10 +981,10 @@ repack_live_layer() {
   iso_layers merge-extended-states --base "$st/base.ext" --live "$st/live.ext" \
     --modified "$WORKDIR/modified.extended_states" --status "$st/merged.status" --out "$st/merged.ext" \
     || fail "live-repack: extended_states merge for $live failed -- see above"
-  install -m 0644 "$st/merged.status" "$lw/var/lib/dpkg/status"
+  gnuinstall -m 0644 "$st/merged.status" "$lw/var/lib/dpkg/status"
   if [ -s "$st/merged.ext" ] || [ -f "$lw/var/lib/apt/extended_states" ]; then
     mkdir -p "$lw/var/lib/apt"
-    install -m 0644 "$st/merged.ext" "$lw/var/lib/apt/extended_states"
+    gnuinstall -m 0644 "$st/merged.ext" "$lw/var/lib/apt/extended_states"
   fi
 
   if [ -n "${LIMPET_TEST_SSH_PUBKEY:-}" ]; then
@@ -1082,7 +1084,7 @@ stage11_build_hybrid_iso() {
   repack_live_layer "$layer" "$changes" "$casper"
 
   # install, not cp: xorriso extracts ISO files 0444 and these get rewritten.
-  install -m 0644 "$casper/install-sources.yaml" "$changes/casper/"
+  gnuinstall -m 0644 "$casper/install-sources.yaml" "$changes/casper/"
   iso_layers set-size --sources "$changes/casper/install-sources.yaml" --layer "$layer" --size "$merged_size"
 
   # The ISO's own boot menu (distinct from the installed system's grub, which
@@ -1092,13 +1094,13 @@ stage11_build_hybrid_iso() {
   # serial log stays empty even though stage10 fixed the installed system.
   local cfg
   for cfg in grub.cfg loopback.cfg; do
-    install -m 0644 "$ISO_EXTRACT/boot/grub/$cfg" "$changes/boot/grub/"
+    gnuinstall -m 0644 "$ISO_EXTRACT/boot/grub/$cfg" "$changes/boot/grub/"
     iso_layers grub-cfg --file "$changes/boot/grub/$cfg"
   done
 
   local rel=()
   mapfile -t rel < <(cd "$changes" && find . -type f | sed 's|^\./||' | sort)
-  install -m 0644 "$ISO_EXTRACT/md5sum.txt" "$changes/md5sum.txt"
+  gnuinstall -m 0644 "$ISO_EXTRACT/md5sum.txt" "$changes/md5sum.txt"
   iso_layers md5sum --root "$changes" "${rel[@]}"
 
   local map_args=() f

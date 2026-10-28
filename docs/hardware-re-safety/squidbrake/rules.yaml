@@ -1,0 +1,152 @@
+# Squidbrake hardware ruleset — interactive RE sessions only (wq#4750, wq#4744 T6)
+#
+# Squidbrake is the human review-hold layer. It sits ABOVE guard.sh/action_gate and
+# never replaces them (docs/hardware-re-safety/gap-analysis.md §3). It applies ONLY to
+# interactive sessions where a human approver is present:
+#   - sessions whose cwd is under /home/lumen/re, and/or
+#   - sessions with a hardware MCP server registered (openocd, limpet-flashrom,
+#     serial-maksoor).
+# Headless fworker sessions NEVER get Squidbrake: no human is there to approve, so for
+# them a hardware RED stays a hard deny in action_gate (gap-analysis §3, T4/wq#4748).
+#
+# This file is consumed two ways:
+#   1. At pilot start it is reconciled against the installed squidbrake schema (young
+#      upstream, versions drift — see README.md "Schema reconciliation").
+#   2. observe_report.py reads it directly to classify the observe-mode event log and
+#      compute would-have-held / false-positive rates. The `match_mcp`, `match_cmd`,
+#      and `action` fields below are the authoritative source of truth for that report.
+
+mode: observe                 # observe | review. Pilot starts here; flip to review only
+                              # after the decision gate in README.md is met.
+when_unreachable: block_risky # If the approval gateway is unreachable, hold risky calls
+                              # rather than failing open (squidbrake default).
+
+scope:
+  session_cwd_prefixes:
+    - /home/lumen/re
+  require_hardware_mcp: true  # also in-scope if a hardware MCP server is registered
+  exclude_headless_fworker: true
+
+# Each rule matches either MCP tool names (match_mcp) or shell command regexes
+# (match_cmd). action: hold = pause for human approval (observe mode: log as
+# would-have-held); allow = pass straight through (read-only / passive).
+
+rules:
+  # ---- openocd MCP (ops/wq3881-openocd-mcp/server.py) ----
+  - id: hw-mcp-openocd-energize
+    class: energize
+    action: hold
+    reason: "JTAG/SWD energize, target memory/flash write, reset/resume lines"
+    match_mcp:
+      - mcp__openocd__connect_target
+      - mcp__openocd__write_target_memory
+      - mcp__openocd__flash_firmware
+      - mcp__openocd__reset_target
+      - mcp__openocd__resume_target
+      - mcp__openocd__halt_target
+      - mcp__openocd__boundary_scan
+  - id: hw-mcp-openocd-read
+    class: read
+    action: allow
+    reason: "read-only JTAG enumeration / memory read / disconnect"
+    match_mcp:
+      - mcp__openocd__read_target_memory
+      - mcp__openocd__scan_jtag_chain
+      - mcp__openocd__jtag_tap_names
+      - mcp__openocd__disconnect_target
+
+  # ---- limpet-flashrom MCP (ops/wq3882-limpet-flashrom-mcp-a1/server.py) ----
+  - id: hw-mcp-flashrom-write
+    class: flash
+    action: hold
+    reason: "SPI flash write / chip erase"
+    match_mcp:
+      - mcp__limpet-flashrom__write_flash
+      - mcp__limpet-flashrom__erase_chip
+  - id: hw-mcp-flashrom-read
+    class: read
+    action: allow
+    reason: "read-only detect / read / verify / programmer identify"
+    match_mcp:
+      - mcp__limpet-flashrom__detect_chip
+      - mcp__limpet-flashrom__read_flash
+      - mcp__limpet-flashrom__verify_flash
+      - mcp__limpet-flashrom__identify_programmer
+
+  # ---- serial-maksoor MCP (ops/wq4513-serial-mcp-maksoor) ----
+  # Upstream exposes ~25 tools and lives off-repo; the energizing verbs below are matched
+  # by name. list_ports is the one proven read-only enumerator. Any serial-maksoor tool
+  # NOT listed here is treated by observe_report.py as unknown and held-by-default in the
+  # energize class, because an open UART with DTR/RTS/BREAK is energizing (README RISKS).
+  - id: hw-mcp-serial-energize
+    class: energize
+    action: hold
+    reason: "open UART / send / DTR/RTS/BREAK — energizes attached target"
+    match_mcp:
+      - mcp__serial-maksoor__open
+      - mcp__serial-maksoor__send
+      - mcp__serial-maksoor__write
+      - mcp__serial-maksoor__set_dtr
+      - mcp__serial-maksoor__set_rts
+      - mcp__serial-maksoor__send_break
+  - id: hw-mcp-serial-read
+    class: read
+    action: allow
+    reason: "port enumeration only"
+    match_mcp:
+      - mcp__serial-maksoor__list_ports
+
+  # ---- sigrok MCP (ops/wq3883-sigrok-mcp/server.py) ----
+  # Logic analyzer is passive measurement, not energizing. Allowed.
+  - id: hw-mcp-sigrok-passive
+    class: read
+    action: allow
+    reason: "passive logic capture/decode — does not drive the target"
+    match_mcp:
+      - mcp__sigrok__list_devices
+      - mcp__sigrok__device_options
+      - mcp__sigrok__configure_samplerate
+      - mcp__sigrok__capture
+      - mcp__sigrok__decode
+      - mcp__sigrok__export
+
+  # ---- CLI flash / erase class ----
+  # Mirrors action_gate BUILTIN_FLASH (harness/action_gate.py:149-182). action_gate still
+  # gates these below; Squidbrake adds the human review-hold on top for /re sessions.
+  - id: hw-cli-flash-erase
+    class: flash
+    action: hold
+    reason: "flash write / erase via CLI flasher (mirror of action_gate BUILTIN_FLASH)"
+    match_cmd:
+      - '\bfastboot\b\s+(flash|erase|format|-w)\b'
+      - '\bheimdall\b\s+flash\b'
+      - '\bflashrom\b[^|;&]*\s-[wE]\b'
+      - '\besptool(\.py)?\b[^|;&]*\b(write_flash|erase_flash|erase_region)\b'
+      - '\bopenocd\b[^|;&]*\b(program|flash\s+write_image|flash\s+erase_(sector|address))\b'
+      - '\bst-flash\b[^|;&]*\b(write|erase)\b'
+      - '\bstm32flash\b[^|;&]*\s-([weo])\b'
+      - '\bavrdude\b[^|;&]*(-U\s*\S*:w:|\s-e\b)'
+      - '\bdfu-util\b[^|;&]*(-D\b|--download\b)'
+      - '\b(rkdeveloptool|upgrade_tool)\b[^|;&]*\b(wl|ef)\b'
+      - '\b(sunxi-fel|xfel)\b[^|;&]*\b(spiflash-write|spi(nor|nand)\s+(write|erase))\b'
+      - '\bmtk(\.py)?\b[^|;&]*\s(w|wf|wl|e|es)\s'
+      - '\b(flashcp|nandwrite|flash_erase)\b'
+      - '\bmtd_debug\b[^|;&]*\bwrite\b'
+
+  # ---- CLU fuse / OTP (one-time, irreversible) ----
+  - id: hw-cli-fuse
+    class: fuse
+    action: hold
+    reason: "eFuse / OTP burn — one-time, irreversible"
+    match_cmd:
+      - '\bespefuse(\.py)?\b[^|;&]*\bburn_\w+\b'
+      - '\bfusee\b|\bfuse\w*\s+burn\b'
+
+  # ---- Voltage / clock (bench supply + clock lines) ----
+  - id: hw-cli-voltage-clock
+    class: voltage_clock
+    action: hold
+    reason: "programmable PSU / clock changes can brown-out or over-clock the target"
+    match_cmd:
+      - '\b(scpi|pyvisa|usbtmc)\b[^|;&]*\b(volt|curr|outp)\b'
+      - '\bopenocd\b[^|;&]*\badapter\s+speed\b'

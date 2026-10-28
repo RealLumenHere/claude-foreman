@@ -217,4 +217,7 @@ during this audit.
   `*/.claude/*` reads. `harness/claude_settings_audit.py` is the masked audit tool, and running
   it on Lumen is a follow-up for the orchestrator lane.
 - **T6** Squidbrake observe-mode pilot for interactive RE sessions with a hardware `rules.yaml`
-  (depends on T2).
+  (depends on T2). *Status (wq#4750):* ruleset, pilot harness, report tool, and the
+  observe→review decision gate authored under `docs/hardware-re-safety/squidbrake/`. The
+  one-week observe run + review-mode decision is an interactive `/home/lumen/re` operator
+  task (a headless worker is out of scope — it cannot be the human approver).
