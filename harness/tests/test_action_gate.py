@@ -244,6 +244,18 @@ FAKE_JUDGE_ALLOW_WITH_CONDITIONS = textwrap.dedent("""\
     sys.exit(2)
 """)
 
+# wq#4748 T4: proves the hardware floor denies BEFORE the judge is consulted --
+# this script would both allow (Low tier) AND leave a trace it ran, so a test
+# asserting the touchfile is absent proves the call never happened at all.
+FAKE_JUDGE_ALLOW_TOUCH = textwrap.dedent("""\
+    #!/usr/bin/env python3
+    import json, os, sys
+    open(os.environ["FAKE_JUDGE_TOUCHFILE"], "w").close()
+    print(json.dumps({"tier": "Low", "verdict": "allow", "conditions": [],
+                       "rationale": "fake allow", "model": "fake-model", "latency_s": 0.01}))
+    sys.exit(0)
+""")
+
 
 def test_judge_enforce_off_by_default_still_hard_blocks_even_if_judge_would_allow(tmp_path):
     """The kill switch: FOREMAN_JUDGE_ENFORCE unset must leave today's behavior
@@ -346,6 +358,76 @@ def test_judge_enforce_condition_staging_failure_fails_closed(tmp_path):
     kinds = [e["event"] for e in _events(tmp_path, "enforce-stage-fail")]
     assert kinds == ["gate_red_block", "judge_enforce", "judge_enforce_condition_stage_failed",
                       "gate_judge_deny"]
+
+
+# ---------------- wq#4748 T4: hardware floor overrides judge enforce --------
+# A RED from BUILTIN_FLASH, the research gate, or a hardware_class project
+# rule must deny even when FOREMAN_JUDGE_ENFORCE=1 and the judge would allow
+# -- and the judge binary must never even be called (proven via the touchfile
+# a real call would leave behind), matching every other judge-enforce test's
+# "fails closed, no exceptions" posture.
+
+def test_judge_enforce_hardware_floor_denies_builtin_flash(tmp_path):
+    """No backup declared at all (and no hardware_class/research gate in play)
+    -- isolates the BUILTIN_FLASH branch itself from the research-gate branch,
+    which runs first in classify_bash when both would otherwise fire."""
+    touchfile = tmp_path / "touched"
+    judge = _fake_judge(tmp_path, "fake_judge_allow_touch.py", FAKE_JUDGE_ALLOW_TOUCH)
+    rc, err = run_hook(bash_payload("fastboot flash boot boot.img"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FAKE_JUDGE_TOUCHFILE": str(touchfile), "FOREMAN_WORKER": "hw-floor-flash"})
+    assert rc == 2, f"BUILTIN_FLASH RED must deny under the hardware floor: {err}"
+    assert "ACTION BLOCKED" in err
+    assert not touchfile.exists(), "judge binary was called for a hardware-floor RED"
+    kinds = [e["event"] for e in _events(tmp_path, "hw-floor-flash")]
+    assert kinds == ["gate_red_block", "gate_hardware_floor_deny"]
+
+
+def test_judge_enforce_hardware_floor_denies_research_gate(tmp_path):
+    touchfile = tmp_path / "touched"
+    judge = _fake_judge(tmp_path, "fake_judge_allow_touch2.py", FAKE_JUDGE_ALLOW_TOUCH)
+    out = compiled(tmp_path, GATEPROJ_RULES)
+    rc, err = run_hook(bash_payload("adb shell getprop ro.build.fingerprint"), {
+        ag.GATE_RULES_ENV: out, ag.HANDOFF_ENV: str(tmp_path),
+        "FOREMAN_EVENTS_DIR": str(tmp_path), "FOREMAN_JUDGE_ENFORCE": "1",
+        "FOREMAN_JUDGE_BIN": judge, "FAKE_JUDGE_TOUCHFILE": str(touchfile),
+        "FOREMAN_WORKER": "hw-floor-research"})
+    assert rc == 2, f"research gate RED must deny under the hardware floor: {err}"
+    assert "ACTION BLOCKED" in err
+    assert not touchfile.exists(), "judge binary was called for a hardware-floor RED"
+    kinds = [e["event"] for e in _events(tmp_path, "hw-floor-research")]
+    assert kinds == ["gate_red_block", "gate_hardware_floor_deny"]
+
+
+def test_judge_enforce_hardware_floor_denies_project_rule(tmp_path):
+    """A hardware_class project red_pattern (miko-tool --reset) is also floored."""
+    touchfile = tmp_path / "touched"
+    judge = _fake_judge(tmp_path, "fake_judge_allow_touch3.py", FAKE_JUDGE_ALLOW_TOUCH)
+    out = compiled(tmp_path)  # MIKO_RULES: hardware_class: unrecoverable
+    rc, err = run_hook(bash_payload("miko-tool --reset --confirm"), {
+        ag.GATE_RULES_ENV: out, ag.HANDOFF_ENV: str(tmp_path),
+        "FOREMAN_EVENTS_DIR": str(tmp_path), "FOREMAN_JUDGE_ENFORCE": "1",
+        "FOREMAN_JUDGE_BIN": judge, "FAKE_JUDGE_TOUCHFILE": str(touchfile),
+        "FOREMAN_WORKER": "hw-floor-project-rule"})
+    assert rc == 2, f"hardware_class project rule RED must deny under the floor: {err}"
+    assert "ACTION BLOCKED" in err
+    assert not touchfile.exists(), "judge binary was called for a hardware-floor RED"
+    kinds = [e["event"] for e in _events(tmp_path, "hw-floor-project-rule")]
+    assert kinds == ["gate_red_block", "gate_hardware_floor_deny"]
+
+
+def test_judge_enforce_non_hardware_red_still_reaches_judge(tmp_path):
+    """Control: a plain BUILTIN_RED (no hardware project, no flash/research gate)
+    must still be judge-eligible -- the floor must not swallow every RED."""
+    judge = _fake_judge(tmp_path, "fake_judge_allow.py", FAKE_JUDGE_ALLOW)
+    rc, err = run_hook(bash_payload("mkfs.ext4 /dev/sdz"), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
+        "FOREMAN_JUDGE_ENFORCE": "1", "FOREMAN_JUDGE_BIN": judge,
+        "FOREMAN_WORKER": "non-hw-floor"})
+    assert rc == 0, f"a non-hardware RED must still be judge-eligible: {err}"
+    kinds = [e["event"] for e in _events(tmp_path, "non-hw-floor")]
+    assert kinds == ["gate_red_block", "judge_enforce", "gate_judge_allow"]
 
 
 # ---------------- Layer 1: GREEN passes ----------------

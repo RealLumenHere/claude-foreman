@@ -448,8 +448,18 @@ def load_compiled_rules():
 # --------------------------------------------------------------------------
 
 def classify_bash(cmd, rules):
-    """Returns (verdict, reason, snap). verdict in RED|AMBER|GREEN.
-    snap = (kind, cmd) for AMBER. RED checked first; project rules additive."""
+    """Returns (verdict, reason, snap, hw_floor). verdict in RED|AMBER|GREEN.
+    snap = (kind, cmd) for AMBER. RED checked first; project rules additive.
+
+    hw_floor (wq#4748 T4) is True only for a RED that must never be
+    judge-allowed under FOREMAN_JUDGE_ENFORCE=1, whatever tier the judge
+    would assign: BUILTIN_FLASH, the research gate (including PRIOR_ART.md
+    tamper), the future hardware write/erase/fuse class (T1, wq#4746 --
+    tag any new table entry there the same way once it lands), or a
+    hardware_class project rule (red_patterns/backup_required_before on a
+    project whose compiled rules set hardware_class). False for every
+    other RED, including the general destructive BUILTIN_RED table and
+    plain gate-tamper -- those stay judge-eligible as before."""
     targets = (cmd, _norm(cmd))
     # wq#2138: only the builtin destructive table and the rm -rf root check see the
     # heredoc-stripped text; tamper, research-gate, flash and project rules stay
@@ -460,72 +470,76 @@ def classify_bash(cmd, rules):
             if reason is None:
                 continue
             if re.search(pat, target, re.IGNORECASE):
-                return "RED", reason, None
+                return "RED", reason, None, False
         r = _red_rm_rf(target)
         if r:
-            return "RED", r, None
+            return "RED", r, None, False
+    hw_class = bool(rules.get("hardware_class"))
     for target in targets:
         # gate-tamper: any mutation touching a rules file is RED
         if RULES_BASENAME.rsplit(".", 1)[0] in target and _MUTATION_MARKERS.search(target):
-            return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None
+            return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None, False
         for entry in rules.get("red_patterns", []):
             if re.search(entry["pattern"], target, re.IGNORECASE):
-                return "RED", entry["reason"], None
+                return "RED", entry["reason"], None, hw_class
         # wq#1006 research phase gate: ordered BEFORE the flash/backup path on
         # purpose — a verified backup does not excuse skipping research. Checked
         # live so a fleet-search run this session opens the gate immediately.
         if _research_gate_required(rules):
             if _PRIOR_ART_TAMPER.search(target):
                 return ("RED", "direct mutation of PRIOR_ART.md (research gate "
-                        "tamper — PRIOR_ART.md is written by fleet-search only)", None)
+                        "tamper — PRIOR_ART.md is written by fleet-search only)", None, True)
             if not _prior_art_ok(rules) and not _FLEET_SEARCH_ONLY.search(target):
                 for pat, label in RESEARCH_GATE_DEVICE:
                     if re.search(pat, target, re.IGNORECASE):
-                        return "RED", _research_gate_reason(label, rules), None
+                        return "RED", _research_gate_reason(label, rules), None, True
         # flash class: RED unless a declared LOCAL backup verifies
         for pat, reason in BUILTIN_FLASH:
             if re.search(pat, target, re.IGNORECASE):
                 b = _local_backup_ok(rules)
                 if b:
-                    return "AMBER", f"{reason} (verified local backup: {b})", ("note", cmd)
-                return "RED", f"{reason} without a verified local backup on disk", None
+                    return "AMBER", f"{reason} (verified local backup: {b})", ("note", cmd), False
+                return "RED", f"{reason} without a verified local backup on disk", None, True
         for tok in rules.get("backup_required_before", []):
             if re.search(r'(^|[\s;|&/])' + re.escape(tok), target, re.IGNORECASE):
                 b = _local_backup_ok(rules)
                 if b:
-                    return "AMBER", f"'{tok}' with verified local backup {b}", ("note", cmd)
-                return "RED", f"project rule: '{tok}' requires a verified backup on disk (none found locally)", None
+                    return "AMBER", f"'{tok}' with verified local backup {b}", ("note", cmd), False
+                return ("RED", f"project rule: '{tok}' requires a verified backup on "
+                        f"disk (none found locally)", None, hw_class)
     for target in targets:
         for pat, reason, kind in BUILTIN_AMBER:
             if re.search(pat, target, re.IGNORECASE):
-                return "AMBER", reason, (kind, cmd)
+                return "AMBER", reason, (kind, cmd), False
         for entry in rules.get("amber_patterns", []):
             if re.search(entry["pattern"], target, re.IGNORECASE):
-                return "AMBER", entry["reason"], ("git", cmd)
-    return "GREEN", "", None
+                return "AMBER", entry["reason"], ("git", cmd), False
+    return "GREEN", "", None, False
 
 
 def classify_file_tool(tool_name, file_path, rules):
+    """Returns (verdict, reason, snap, hw_floor) -- see classify_bash for the
+    hw_floor contract (wq#4748 T4)."""
     if not file_path:
-        return "GREEN", "", None
+        return "GREEN", "", None, False
     base = os.path.basename(file_path)
     if base == RULES_BASENAME or base.startswith(".fworker-rules"):
-        return "RED", "write/edit of .fworker-rules.yaml (gate tamper)", None
+        return "RED", "write/edit of .fworker-rules.yaml (gate tamper)", None, False
     # wq#1006: PRIOR_ART.md is machine-written by fleet-search only — a hand
     # Write/Edit would open the research gate without research.
     if base == "PRIOR_ART.md" and _research_gate_required(rules):
         return ("RED", "write/edit of PRIOR_ART.md (research gate tamper — "
-                "run fleet-search instead)", None)
+                "run fleet-search instead)", None, True)
     if re.match(r'^/(etc|boot|usr|dev)(/|$)', os.path.realpath(file_path)):
-        return "RED", f"{tool_name} into system path {file_path}", None
+        return "RED", f"{tool_name} into system path {file_path}", None, False
     for entry in rules.get("red_patterns", []):
         if re.search(entry["pattern"], file_path, re.IGNORECASE):
-            return "RED", entry["reason"], None
+            return "RED", entry["reason"], None, bool(rules.get("hardware_class"))
     if tool_name == "Edit" and os.path.isfile(file_path):
-        return "AMBER", "file edit (pre-image snapshot)", ("path", file_path)
+        return "AMBER", "file edit (pre-image snapshot)", ("path", file_path), False
     if tool_name == "Write" and os.path.isfile(file_path):
-        return "AMBER", "file overwrite (pre-image snapshot)", ("path", file_path)
-    return "GREEN", "", None
+        return "AMBER", "file overwrite (pre-image snapshot)", ("path", file_path), False
+    return "GREEN", "", None, False
 
 
 # --------------------------------------------------------------------------
@@ -1146,17 +1160,23 @@ def hook_main():
             if not cmd:
                 print("action_gate: Bash with no command — fail-closed", file=sys.stderr)
                 return 2
-            verdict, reason, snap = classify_bash(cmd, rules)
+            verdict, reason, snap, hw_floor = classify_bash(cmd, rules)
             detail = cmd
         elif tool_name in ("Edit", "Write"):
-            verdict, reason, snap = classify_file_tool(tool_name, ti.get("file_path") or "", rules)
+            verdict, reason, snap, hw_floor = classify_file_tool(
+                tool_name, ti.get("file_path") or "", rules)
             detail = ti.get("file_path") or ""
         else:
             return 0  # Read etc — GREEN by definition here; guard.sh owns its own denials
         if verdict == "RED":
             handoff = write_red_handoff(tool_name, detail, reason, rules)
             _log_event("gate_red_block", reason=reason, snippet=detail[:200], handoff=handoff)
-            if _judge_enforce_enabled():
+            if hw_floor:
+                # wq#4748 T4: a hardware-class RED is never judge-allowed, whatever
+                # tier the judge would assign -- deny before the judge is even
+                # consulted (no enforce call, no shadow call).
+                _log_event("gate_hardware_floor_deny", reason=reason)
+            elif _judge_enforce_enabled():
                 outcome = enforce_judge_verdict(tool_name, detail, reason, rules, cwd)
                 if outcome["action"] in ("allow", "allow-with-conditions"):
                     _log_event(f"gate_judge_{outcome['action'].replace('-', '_')}",
