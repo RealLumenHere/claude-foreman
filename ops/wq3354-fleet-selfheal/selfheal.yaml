@@ -159,7 +159,14 @@ nodes:                  # CLASS 6
        Still not ignore/sleepers: no fact says it is meant to be off and it has no idle
        timer. The physical check (is it powered, and does Frank power it down between RE
        sessions?) is queued as wq#4776 [frank-hw]. If Frank says it is a bench device he
-       powers down by hand, it moves to nodes.ignore the way maksoor did."
+       powers down by hand, it moves to nodes.ignore the way maksoor did.
+      wq#4780 (2026-10-29, LastSeen 16:30Z): THIRD occurrence, and it came back between pages
+       again. The last two dropped ~24h apart at about the same time of day (10-28 16:00Z,
+       10-29 16:30Z), which fits a daily power-down or a daily upstream-link drop better than
+       random faults. Re-probed from lumen at 17:02Z: 192.168.8.204:22/8443 EHOSTUNREACH,
+       100.120.105.55:22 timeout, gateway 192.168.8.1:80 open. Same state as wq#4775, with
+       the same missing remote path. wq#4776 [frank-hw] is still open and now carries the
+       time-of-day pattern. Classification unchanged until it answers."
     sia: "wq#4437: offline on tailscale since 2026-10-20T02:20:00Z (30+ min). lumen_state's
        sia.status='HEALTHY' (docker containers up 12h+, Miniflux news pipeline + PG17) and
        sia.provision_status='COMPLETE' are both dated 2026-07-10/11 -- over 3 months stale,
