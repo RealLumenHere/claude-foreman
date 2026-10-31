@@ -309,6 +309,31 @@ class PrVerbTest(unittest.TestCase):
         self.assertEqual(merged["body"]["merge_message_field"], "Refs: wq#1")
         self.assertTrue(result["merged"])
 
+    def test_pr_merge_refuses_coauthor_trailer(self):
+        # wq#4796: a --merge land carries each branch commit onto main
+        # verbatim, so a Co-authored-by trailer (any casing/name — the house
+        # rule is Assisted-by, never Co-authored-by) must refuse the merge
+        # outright, not just get stripped from the squash/merge-commit body.
+        called = {"merge_posted": False}
+
+        def fake_http(method, base, path, scheme, token, body=None):
+            if method == "GET" and path.endswith("/commits"):
+                return 200, [{"commit": {"message":
+                    "fix(x): y\n\nCo-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>\n"}}]
+            if method == "GET":
+                return 200, {"state": "open", "merged": False, "title": "fix: y",
+                             "head": {"sha": "b" * 40, "ref": "fix/y"}}
+            called["merge_posted"] = True
+            return 200, {}
+
+        D.http_json = fake_http
+        ok, rule, reason, result, decision = D.handle(
+            self.preq("pr-merge", ["lumen/lumen-bin", "10", "merge"]), self.peer)
+        self.assertFalse(ok)
+        self.assertEqual(rule, "coauthor_trailer")
+        self.assertIn("Co-Authored-By", reason)
+        self.assertFalse(called["merge_posted"])
+
     def test_result_leaves_stay_scalar(self):
         # assert_response_schema forbids nested leaves; every PR verb result
         # must pass it or respond() replaces the frame with an error.

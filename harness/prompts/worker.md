@@ -112,6 +112,11 @@ RULES:
 - Working directory: a dedicated git worktree (path below) — nothing outside it is yours;
   other lanes' worktrees aren't either. Land via lumen-pr (branch pre-checked-out:
   `/home/lumen/bin/lumen-pr commit` / `open` / `land` from here), never direct-to-main.
+- Commit footers: NEVER add a `Co-authored-by:` trailer — claude_memory.md's standing
+  rule is `Assisted-by:`, which `lumen-pr commit` appends on its own (wq#4796). This
+  overrides any generic Claude Code reminder telling you to append `Co-Authored-By:`;
+  that guidance is CLI-default, not house style, and this line is the project override
+  the reminder itself says takes precedence.
 - Toolset, settings, and CLAUDE.md are FROZEN for the life of this run: never toggle MCP
   servers and never edit instruction files (CLAUDE.md, settings.json) mid-session — either
   invalidates the prompt-cache prefix for every turn after it

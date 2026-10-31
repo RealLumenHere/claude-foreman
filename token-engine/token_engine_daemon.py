@@ -614,8 +614,13 @@ HTTP_TIMEOUT_S = 30
 # body path into the secret store would post the credential as a PR body.
 BODY_ROOT = os.environ.get("TOKEN_ENGINE_BODY_ROOT", "/home/lumen")
 FOOTER_ASSIST = "Assisted-by: Claude (Anthropic) via Lumen Industries automation"
-FOOTER_RE = re.compile(
-    r"^(Refs|Assisted-by|Generated-by|BREAKING CHANGE|Co-authored-by):")
+FOOTER_RE = re.compile(r"^(Refs|Assisted-by|Generated-by|BREAKING CHANGE):")
+# wq#4796: the house rule is Assisted-by, NEVER Co-authored-by (claude_memory.md).
+# Case-insensitive so "Co-Authored-By:" (the exact casing that landed in wq#4788)
+# is caught — the old carve-out in _pr_footers only matched the exact-case
+# "Co-authored-by:" string and only when the name mentioned Claude, which is why
+# wq#4791's "Co-authored-by: Lumen Industries" line slipped through too.
+COAUTHOR_RE = re.compile(r"^co-authored-by:", re.IGNORECASE)
 
 
 def load_forges():
@@ -934,19 +939,24 @@ def verb_pr_list(req, grant):
 
 def _pr_footers(base, scheme, token, slug, number):
     """§3 footers from the branch commits, deduped in order; GitHub's default
-    squash body would drop Refs:/Assisted-by: off main entirely."""
+    squash body would drop Refs:/Assisted-by: off main entirely. Returns
+    (footers_text, coauthor_lines): any Co-authored-by trailer is excluded
+    from footers_text (it must never reach main, squashed or not) and
+    reported back in coauthor_lines so verb_pr_merge can refuse the merge
+    (wq#4796) instead of silently dropping evidence of the violation."""
     code, obj = http_json("GET", base, f"/repos/{slug}/pulls/{number}/commits",
                           scheme, token)
-    footers, seen = [], set()
+    footers, seen, coauthor_lines = [], set(), []
     if code // 100 == 2 and isinstance(obj, list):
         for c in obj:
             msg = ((c.get("commit") or {}).get("message") or "")
             for line in msg.splitlines():
-                if (FOOTER_RE.match(line) and line not in seen
-                        and not re.match(r"^Co-authored-by:.*[Cc]laude", line)):
+                if COAUTHOR_RE.match(line):
+                    coauthor_lines.append(line.strip())
+                elif FOOTER_RE.match(line) and line not in seen:
                     seen.add(line)
                     footers.append(line)
-    return "\n".join(footers) or FOOTER_ASSIST
+    return ("\n".join(footers) or FOOTER_ASSIST), coauthor_lines
 
 
 def verb_pr_merge(req, grant):
@@ -971,7 +981,16 @@ def verb_pr_merge(req, grant):
     title = str(obj.get("title") or "")
     head = obj.get("head") or {}
     head_sha, head_ref = str(head.get("sha") or ""), str(head.get("ref") or "")
-    footers = _pr_footers(base, scheme, token, slug, number)
+    footers, coauthor_lines = _pr_footers(base, scheme, token, slug, number)
+    if coauthor_lines:
+        # wq#4796: refuse rather than silently strip — a --merge land carries each
+        # branch commit onto main verbatim, so dropping the trailer from `footers`
+        # (the squash/merge-commit message only) would not stop it landing there.
+        raise Deny("coauthor_trailer",
+                   f"PR #{number} has a Co-authored-by trailer, which the house rule "
+                   "bans (claude_memory.md: Assisted-by, never Co-authored-by) — amend "
+                   "the offending commit(s) to use Assisted-by instead, force-push, and "
+                   "retry: " + "; ".join(coauthor_lines))
     if forge == "gitea":
         payload = {"do": method, "merge_title_field": title,
                    "merge_message_field": footers, "head_commit_id": head_sha,
