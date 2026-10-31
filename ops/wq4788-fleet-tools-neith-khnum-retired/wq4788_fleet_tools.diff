@@ -1,0 +1,47 @@
+--- a/context/fleet_tools.yaml (before)
++++ b/context/fleet_tools.yaml (after)
+@@ -6,9 +6,9 @@
+ note: >-
+   LUMEN IS HEADLESS — no local console. EVERY shell command meant for Lumen MUST be SSH-wrapped:
+   ssh lumen@100.117.66.102 \'<command>\'. A bare wq/slock/lumen-pr line handed to Frank runs on
+-  whatever box he is on and fails. (Commander MCP does NOT execute on Lumen: it runs on HORUS as user horus, with
+-  neith/khnum as standbys, so a Commander start_process call ALSO needs ssh lumen@100.117.66.102 for any
+-  Lumen path, wq, lumen_state or file; a bare command lands on horus. Verified 2026-10-19: hostname=horus.)
++  whatever box he is on and fails. (Commander MCP does NOT execute on Lumen: it runs on HORUS as
++  user horus, with no live standby (neith/khnum retired 2026-10-27, wq#4788) -- a Commander
++  start_process call ALSO needs ssh lumen@100.117.66.102 for any Lumen path, wq, lumen_state or
++  file; a bare command lands on horus. Verified 2026-10-19: hostname=horus.)
+   These are FLEET-WIDE capabilities — reach for them before hand-running anything or asking Frank.
+   The dispatcher/broker spawns and runs work on its own; an orchestrator queues and verifies, it does
+   not babysit passes. Research goes to the fleet, not to hand-searching.
+@@ -223,7 +223,7 @@
+       - name: Commander MCP
+         path: /home/lumen
+         use: "start_process / read_process_output / read_file over mcpw.lumennode.uk. Prefer lumen-run for long jobs; DC recycles and can drop long foreground output."
+-        invoke: "(browser MCP — Commander runs on HORUS (user horus; neith/khnum standbys), NOT Lumen: call start_process with ssh lumen@100.117.66.102 '<cmd>' for anything on Lumen; a bare command executes on horus)"
++        invoke: "(browser MCP — Commander runs on HORUS (user horus; no live standby, neith/khnum retired 2026-10-27), NOT Lumen: call start_process with ssh lumen@100.117.66.102 '<cmd>' for anything on Lumen; a bare command executes on horus)"
+       - name: claude-auth-renew (agent-driven OAuth, Frank clicks once)
+         path: /home/lumen/.secrets/claude-oat-worker.token
+         use: "wq#3722/#3748: ONE Claude Code credential on Lumen = the long-lived setup-token in this file, exported as CLAUDE_CODE_OAUTH_TOKEN by the claude-oat-env block at the head of ~/.bashrc (and by fworker.build_env). Minted 2026-09-11, ~1 year: RENEW BY 2027-09-01. Never use interactive claude auth login as the fleet credential (30-day refresh window, rotted 2026-10-09). OAuth needs a human browser click by design, but the agent does all the typing: nobody wrestles a terminal."
+         invoke: "1) Commander start_process: ssh -tt lumen@100.117.66.102 /home/lumen/.npm-global/bin/claude setup-token   2) post the printed https://claude.com/cai/oauth/authorize URL in chat   3) Frank opens it, Authorize, pastes the code into chat   4) interact_with_process with the code; capture the printed sk-ant-oat01-... token; back up then overwrite the .secrets file (0600)   5) verify: ssh lumen@100.117.66.102 /home/lumen/.npm-global/bin/claude auth status -> authMethod oauth_token; then sudo stale-env-audit"
+
+-  p1_commander:
+-    desc: "wq#3442 control-plane relocation: Commander HA pair on two Station P1 non-Pros (RK3399 arm64) OFF Lumen. PROVISIONED 2026-10-05; SERVING by 2026-10-07 (wq#3510 verified: Commander calls land on khnum/neith and fail over between them; cloudflared active with tunnel creds on both; MCP_BACKENDS commit 0d8b915 merged on master; Lumen DC unit disabled at boot since 2026-10-06 but still running). NOT verified: deployed Worker config (/pool/health needs auth). Watchdog cloudflared+mcpw probes are STILL HELD on both nodes (monitoring gap). Runbook/history: see /home/lumen/scratch/wq3442/README.md."
+-    tools:
+-      - name: neith (Commander primary, SERVING 2026-10-07)
+-        path: /home/lumen/scratch/wq3442
+-        use: "ssh neith@100.108.107.111 (alias neith did NOT resolve from Lumen 2026-10-07, use the IP). dc-gateway :3100 (supergateway+DC 0.2.46 patched), cloudflared active (tunnel creds + config.yml present; hostname mapping not inspected). Runbook: foreman/ops/p1-commander. Updates: p1-update.sh, Frank-driven only, one box at a time."
+-        invoke: "ssh neith@100.108.107.111 (use the IP; alias did not resolve from Lumen)"
+-      - name: khnum (Commander mirror, SERVING 2026-10-07)
+-        path: /home/lumen/scratch/wq3442
+-        use: "ssh khnum@100.76.194.58 (alias khnum did NOT resolve from Lumen, use the IP). Same stack; keep ~2 weeks behind neith on updates (control-plane rule 2). Watchdog cloudflared+mcpw probes STILL held by drop-in 10-hold-mcpw-until-token.conf on both nodes (2026-10-07) although serving: monitoring gap, needs the mcpw-diag token step."
+-        invoke: "ssh khnum@100.76.194.58 (use the IP; alias did not resolve from Lumen)"
+-
++  # p1_commander group REMOVED 2026-10-31 (wq#4788): neith + khnum lifecycle=retired in
++  # lumen_state 2026-10-27 (Frank: Commander standbys superseded by cloud; claude_memory.md
++  # hand-prose STANDING ORDER "do not propose patching, promoting, or HA-pairing neith/khnum").
++  # Commander = horus only; no live standby exists (verified via lumen_state.py current
++  # neith/khnum: both role=RETIRED, lifecycle=retired). If the physical boxes are reused later
++  # that is a new provisioning ticket under a new role, not a reinstatement of this group.
+
+   p1_inference:
