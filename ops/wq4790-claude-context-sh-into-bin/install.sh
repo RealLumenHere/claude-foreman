@@ -14,6 +14,13 @@ set -euo pipefail
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DST=${CLAUDE_CONTEXT_DST:-/home/lumen/bin/claude_context.sh}
 
+# wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
+if [ "${1:-}" = --verify ]; then
+  . "$SRC/../_verify.sh"
+  vfile "$SRC/claude_context.sh" "$DST"
+  vdone
+fi
+
 if [ "${1:-}" = "--dry-run" ]; then
   if [ -e "$DST" ] && cmp -s "$SRC/claude_context.sh" "$DST"; then
     echo "dry-run: $DST already current"
