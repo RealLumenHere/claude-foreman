@@ -72,6 +72,23 @@ providers:              # CLASS 5
   env_path: /home/lumen/.secrets/litellm-service-keys/env/sentinel.env   # master key is retired on LLM routes (wq#914); probe with the sentinel virtual key (same LITELLM_MASTER_KEY var name)
   gateway_url: http://localhost:4000/v1/chat/completions
   cooldown_path: /home/lumen/foreman/dispatcher/runtime/backend_cooldown.json
+  notes:                          # wq#4786 (same outage wq#4784 already flagged, still
+                                   # open as PR#2566/claude-foreman): known-issue context
+                                   # for a cooled-down rung, mirrors nodes.notes below
+                                   # (wq#3619) -- not a silencer, just context carried
+                                   # into the next page
+    gemini-flash: "wq#4784/wq#4786 (2026-10-30/31): LiteLLM upstream gemini answering
+       401/403 since ~10:34Z, rungs cooled down in backend_cooldown.json so dispatch
+       skips them -- normal CLASS 5 behavior. The actual fix (rotate the provider key,
+       restart LiteLLM) needs the wq#3747 credential-rotation safety gate's attended
+       step first: harness/guard.sh refuses any rotate-* tool invocation -- including a
+       bare mention of its name in a Bash command, per ISSUE-LOG row 1261's known
+       over-match -- without a same-day Vault backup marker, which only an attended
+       operator holding the Vault master password can create. A headless BUILD worker
+       cannot perform that step (ISSUE-LOG rows 671/1639). Once Frank runs the attended
+       rotate+restart, fleet-selfheal re-enables the rung on the next good probe with no
+       further ticket needed; until then this is the wq#1676 physical-task escape
+       hatch, not a bug in this repo."
 
 nodes:                  # CLASS 6
   enabled: true
