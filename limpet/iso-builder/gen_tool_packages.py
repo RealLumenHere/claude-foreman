@@ -104,6 +104,10 @@ BINARY_RECIPES = {
         "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db",
         "extract_to": "/opt/ghidra",
         "runtime_apt": ["openjdk-21-jre-headless"],
+        # wq#4809: ghidraRun unpacked fine but was never linked onto PATH --
+        # stage4d now symlinks /usr/local/bin/<bin> -> <extract_to>/<bin> for
+        # every binary artifact that declares one.
+        "bin": "ghidraRun",
     },
     # wq#4734: jadx release zip has no single top-level wrapper directory (its
     # entries are LICENSE, README.md, bin/, lib/ directly) -- sha256 is GitHub's
@@ -114,6 +118,7 @@ BINARY_RECIPES = {
         "sha256": "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974",
         "extract_to": "/opt/jadx",
         "runtime_apt": ["openjdk-21-jre-headless"],
+        "bin": None,
     },
 }
 
@@ -311,7 +316,8 @@ def build_manifest(tools: list[dict], runner=subprocess.run) -> dict:
                           "url": BINARY_RECIPES[r.package]["url"],
                           "sha256": BINARY_RECIPES[r.package]["sha256"],
                           "extract_to": BINARY_RECIPES[r.package]["extract_to"],
-                          "runtime_apt": BINARY_RECIPES[r.package]["runtime_apt"]} for r in binary]
+                          "runtime_apt": BINARY_RECIPES[r.package]["runtime_apt"],
+                          "bin": BINARY_RECIPES[r.package].get("bin")} for r in binary]
 
     source_build = [r for r in resolutions if r.method == "source-build"]
     source_build_tools = [{"name": r.name, "repo": r.package, "commit": r.commit,

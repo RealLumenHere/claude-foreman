@@ -538,7 +538,7 @@ verify_re_tools() {
   while read -r bin; do
     [ -n "$bin" ] || continue
     root_exec_ok "$root" "$bin" || { log "missing RE tool binary: $bin"; miss=1; }
-  done < <(jq -r '((.cargo_crates + .pip_packages)[] | "/usr/local/bin/" + .bin), (.pip_git_packages[] | "/opt/re-venv/bin/" + .bin), ((.source_build_tools // [])[].bin)' "$TOOL_MANIFEST")
+  done < <(jq -r '((.cargo_crates + .pip_packages)[] | "/usr/local/bin/" + .bin), (.pip_git_packages[] | "/opt/re-venv/bin/" + .bin), ((.source_build_tools // [])[].bin), ((.binary_artifacts // [])[] | select(.bin) | "/usr/local/bin/" + .bin)' "$TOOL_MANIFEST")
   while read -r dir; do
     [ -n "$dir" ] || continue
     [ -n "$(ls -A "$root$dir" 2>/dev/null)" ] || { log "missing RE tool artifact dir: $dir"; miss=1; }
@@ -693,12 +693,12 @@ stage4c_build_pip_tools() {
 stage4d_fetch_binary_tools() {
   local manifest="$1" out="$WORKDIR/binary-out"
   require_cmd curl; require_cmd jq; require_cmd sha256sum; require_cmd unzip
-  mkdir -p "$out"
-  local c name artifact url sha256 extract_to got top
+  mkdir -p "$out" "$out/usr/local/bin"
+  local c name artifact url sha256 extract_to bin got top
   while read -r c; do
     name="$(jq -r .name <<<"$c")"; artifact="$(jq -r .artifact <<<"$c")"
     url="$(jq -r .url <<<"$c")"; sha256="$(jq -r .sha256 <<<"$c")"
-    extract_to="$(jq -r .extract_to <<<"$c")"
+    extract_to="$(jq -r .extract_to <<<"$c")"; bin="$(jq -r '.bin // ""' <<<"$c")"
     log "stage4d: fetch $name ($artifact, sha256-pinned)"
     curl -fsSL "$url" -o "$out/$artifact"
     got="$(sha256sum "$out/$artifact" | cut -d' ' -f1)"
@@ -719,7 +719,18 @@ stage4d_fetch_binary_tools() {
       cp -a "$out/extract-$name/." "$CHROOT$extract_to/"
     fi
     log "stage4d: installed $extract_to from $artifact (sha256 ${got:0:16}...)"
+    # wq#4809: ghidra unzips a launcher (ghidraRun) into extract_to, but nothing put
+    # it on PATH -- for ghidra this resolves to `ln -s /opt/ghidra/ghidraRun
+    # /usr/local/bin/ghidraRun`. Mirror stage4c's out-then-cp pattern (build the
+    # symlink under $out, bulk-copy into $CHROOT at the end) rather than writing
+    # into $CHROOT mid-loop, so it lands the same way every other stage4d artifact
+    # does and survives the upper/ layer pack.
+    if [ -n "$bin" ]; then
+      ln -sfn "$extract_to/$bin" "$out/usr/local/bin/$bin"
+      log "stage4d: linked /usr/local/bin/$bin -> $extract_to/$bin"
+    fi
   done < <(jq -c '.binary_artifacts[]' "$manifest")
+  [ -d "$out/usr/local/bin" ] && cp -a "$out/usr/local/bin/." "$CHROOT/usr/local/bin/"
 }
 
 # wq#4734: fetch recipe-backed source tools (searchsploit) that ship no packaged release --

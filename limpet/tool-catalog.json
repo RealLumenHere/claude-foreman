@@ -204,6 +204,7 @@
     {
       "name": "ghidra",
       "path": "/opt/ghidra/support/analyzeHeadless",
+      "bin": "/usr/local/bin/ghidraRun",
       "version": "12.1.3",
       "description": "NSA software reverse engineering suite; headless analyzer for scripted disassembly and decompilation.",
       "category": "disassembly-decompilation",

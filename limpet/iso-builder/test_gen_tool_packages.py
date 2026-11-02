@@ -253,6 +253,7 @@ def test_manifest_carries_binary_artifact_and_its_sha256():
         "url": g.BINARY_RECIPES["ghidra_12.1.4_PUBLIC_20260921.zip"]["url"],
         "sha256": g.BINARY_RECIPES["ghidra_12.1.4_PUBLIC_20260921.zip"]["sha256"],
         "extract_to": "/opt/ghidra", "runtime_apt": ["openjdk-21-jre-headless"],
+        "bin": "ghidraRun",
     }]
     assert "openjdk-21-jre-headless" in m["apt_packages"]
     assert m["totals"]["binary"] == 1
