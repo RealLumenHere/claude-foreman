@@ -1,0 +1,26 @@
+# wq#4808 — merge into the live LiteLLM proxy config
+# (/home/lumen/agent/litellm_config.yaml — NOT in this repo, lives on the
+# gateway node; same hand-merge convention as wq#897/wq#948/wq#1295/wq#1406/
+# wq#1590/wq#2627/wq#2471/wq#4102/wq#4135). Deploy: run add_fallback.py
+# --write (reload_and_verify.sh next to this file), don't hand-edit — it
+# re-parses and diffs the result against original + this one entry before
+# writing, and keeps everything else byte-identical.
+#
+# Closes the "No fallback model group found for original model_group=gemini-flash"
+# hard-fail on free-tier 429 (20 RPD on gemini-2.5-flash, research/models.yaml:271).
+# Supersedes wq#2471/wq#2627's `gemini-flash -> cerebras-oss-120b` proposal,
+# which never landed and would route onto a rung dead with 402 Payment
+# Required since the 2026-08-19 Cerebras billing lapse (wq#4135 probe table).
+#
+# gemini-flash -> deepseek-v4-flash -> openrouter-free (deepseek-v4-flash's
+# own existing fallback entry below): depth 2, terminal at openrouter-free,
+# no cycle. Both gemini-flash and deepseek-v4-flash are fast/cheap chat-tier
+# groups; nothing routes gemini-flash to a vision/multimodal path (grepped
+# council.yaml/council.py/minerva_verify.py callers), so no route needs
+# excluding. Fallback firing should stay restricted to quota/rate_limited/
+# error and never fire on auth/billing (sibling selfheal-classify ticket);
+# router_settings.retry_policy already sets AuthenticationErrorRetries: 0 /
+# BadRequestErrorRetries: 0, so this entry adds no new auth/billing exposure.
+router_settings:
+  fallbacks:
+    - gemini-flash: [deepseek-v4-flash]
