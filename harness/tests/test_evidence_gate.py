@@ -404,6 +404,54 @@ def test_ops_payload_citation_with_matching_deploy_target_is_accepted(worktree, 
     assert result["ok"], result["failed"]
 
 
+def test_ops_install_citation_with_no_deploy_needed_is_accepted_and_surfaces_followup(worktree):
+    """wq#4778 (ISSUE-LOG #1636): mirrors wq done's own --no-deploy-needed (wq#1724) — a
+    sandboxed BUILD worker with no ssh/fleet-exec grant onto the live host and no deploy
+    path inside any worktree's allowed dirs can close over a reason instead of being stuck
+    forever. The override is never silent: verify() surfaces a root_apply_followup
+    descriptor so the caller (fworker.py) can file/reuse the tracked follow-up ticket this
+    module itself never touches wq to create."""
+    _write_ops_artifact(worktree)
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "no_deploy_needed": "sandbox has no ssh/fleet-exec grant onto the "
+                                           "live host (wq#4778)"}]},
+        str(worktree), base_ref="main")
+    assert result["ok"], result["failed"]
+    assert result["root_apply_followups"] == [
+        {"bundle": "wq1632-fake-fix",
+         "install_path": str(worktree / "foreman" / "ops" / "wq1632-fake-fix" / "install.sh"),
+         "why": "sandbox has no ssh/fleet-exec grant onto the live host (wq#4778)"}]
+    ac2 = [c for c in result["checked"] if c["id"] == "AC2"][0]
+    assert ac2["root_apply_followup"] == result["root_apply_followups"][0]
+
+
+def test_ops_install_citation_with_deploy_target_ignores_no_deploy_needed_can_fail(
+        worktree, tmp_path):
+    """wq#2630 can-fail probe, drawn from outside the no_deploy_needed population: a
+    citation that DOES supply a deploy_target but a bad deploy_verify must still be
+    rejected on the deploy_verify path — a stray no_deploy_needed key must not leak into
+    (or short-circuit) the ordinary deploy_target/deploy_verify branch."""
+    _write_ops_artifact(worktree)
+    live = tmp_path / "target" / "lumen_state.py"
+    live.parent.mkdir()
+    live.write_text("# fixed lifecycle closure logic\n")
+    (worktree / "probe.py").write_text("import sys\nsys.exit(0)\n")
+    result = acceptance.verify(
+        _acceptance_doc(),
+        {"criteria": [{"id": "AC1", "cmd_run": "python3 probe.py", "exit_code": 0},
+                      {"id": "AC2", "citation": "foreman/ops/wq1632-fake-fix/install.sh:1",
+                       "deploy_target": str(live), "no_deploy_needed": "irrelevant text"}]},
+        str(worktree), base_ref="main")
+    assert not result["ok"]
+    ac2 = [f for f in result["failed"] if f["id"] == "AC2"][0]
+    assert "deploy_verify" in ac2["observed"]
+    assert "root_apply_followups" not in result
+
+
 def test_ops_install_citation_with_self_referential_deploy_target_is_rejected(worktree):
     """wq#2762 (ISSUE-LOG #859, closes wq#1734): pointing deploy_target at the artifact's
     own shipped payload byte-matches itself and would pass with zero real deployment."""

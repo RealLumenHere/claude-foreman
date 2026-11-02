@@ -54,14 +54,14 @@ def check(entry):
 
 
 def test_landed_cross_repo_citation_is_accepted(other_repo):
-    ok, why, _ = check({"citation": "tool.sh:1-10",
+    ok, why, _, _ = check({"citation": "tool.sh:1-10",
                         "repo": other_repo["path"], "rev": other_repo["landed"]})
     assert ok, why
     assert other_repo["landed"] in why
 
 
 def test_unlanded_rev_is_rejected(other_repo):
-    ok, why, _ = check({"citation": "side.txt:1",
+    ok, why, _, _ = check({"citation": "side.txt:1",
                         "repo": other_repo["path"], "rev": other_repo["unlanded"]})
     assert not ok
     assert "has not landed" in why
@@ -69,28 +69,28 @@ def test_unlanded_rev_is_rejected(other_repo):
 
 def test_unmanaged_repo_is_rejected(other_repo, monkeypatch):
     monkeypatch.setattr(repo_sweep, "managed_repos", lambda: set())
-    ok, why, _ = check({"citation": "tool.sh:1",
+    ok, why, _, _ = check({"citation": "tool.sh:1",
                         "repo": other_repo["path"], "rev": other_repo["landed"]})
     assert not ok
     assert "not a managed repo" in why
 
 
 def test_file_outside_the_revs_own_diff_is_rejected(other_repo):
-    ok, why, _ = check({"citation": "base.txt:1",
+    ok, why, _, _ = check({"citation": "base.txt:1",
                         "repo": other_repo["path"], "rev": other_repo["landed"]})
     assert not ok
     assert "not touched" in why
 
 
 def test_line_range_beyond_the_committed_file_is_rejected(other_repo):
-    ok, why, _ = check({"citation": "tool.sh:1-99",
+    ok, why, _, _ = check({"citation": "tool.sh:1-99",
                         "repo": other_repo["path"], "rev": other_repo["landed"]})
     assert not ok
     assert "cited 1-99" in why
 
 
 def test_missing_rev_is_rejected(other_repo):
-    ok, why, _ = check({"citation": "tool.sh:1", "repo": other_repo["path"]})
+    ok, why, _, _ = check({"citation": "tool.sh:1", "repo": other_repo["path"]})
     assert not ok
     assert "needs a 'rev'" in why
 
@@ -99,6 +99,6 @@ def test_local_citations_still_use_the_worktree_diff(tmp_path):
     # no "repo" field: unchanged local path — nonexistent file in an empty worktree fails
     wt = tmp_path / "wt"
     wt.mkdir()
-    ok, why, _ = acceptance._check_citation({"citation": "impl.py:1"}, str(wt), set())
+    ok, why, _, _ = acceptance._check_citation({"citation": "impl.py:1"}, str(wt), set())
     assert not ok
     assert "does not exist" in why

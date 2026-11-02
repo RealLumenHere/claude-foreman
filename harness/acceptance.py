@@ -799,16 +799,31 @@ def _sha256(path):
         return None
 
 
+# wq#4778 (ISSUE-LOG #1636): wq done's own ops-deploy gate has a --no-deploy-needed
+# escape for exactly the shape a sandboxed BUILD worker hits here — no ssh/fleet-exec
+# grant onto the live host, and the deploy target sits outside every worktree's allowed
+# dirs — but this citation gate had no equivalent, so a worker with a provably correct
+# config fix could never self-close (wq#4774). This module stays "no wq, no dispatch"
+# (module docstring): the override does not file anything itself, it only hands the
+# caller (fworker.py, which already owns wq_show/wq_block) a followup descriptor naming
+# the bundle, so the follow-up ticket — same wq#3487 shape, same
+# `Liveness: ops_verified(<bundle>)` auto-close tag — gets filed/reused one layer up.
 def _ops_deploy_evidence(entry, abspath):
     target = str(entry.get("deploy_target") or "").strip()
     art_dir = os.path.dirname(abspath)
+    no_deploy_needed = str(entry.get("no_deploy_needed") or "").strip()
     if not target:
+        if no_deploy_needed:
+            followup = {"bundle": os.path.basename(art_dir), "install_path": abspath,
+                        "why": no_deploy_needed}
+            return True, f"{abspath}: no_deploy_needed={no_deploy_needed!r}", followup
         return False, (f"{abspath} is an ops install artifact — landing on this branch proves "
                        f"the script exists, not that it reached a target; add a "
                        f"'deploy_target' path to this criterion naming a live file whose bytes "
-                       f"match one shipped in {art_dir}")
+                       f"match one shipped in {art_dir}, or a 'no_deploy_needed' reason naming "
+                       f"why a sandboxed worker cannot reach the target"), None
     if not os.path.isfile(target):
-        return False, f"deploy_target {target} does not exist"
+        return False, f"deploy_target {target} does not exist", None
     # wq#2762 (ISSUE-LOG #859, closes wq#1734's verify-pass escalation): a deploy_target
     # inside the artifact's own directory byte-matches itself and passes with zero real
     # deployment — reject that before the walk, not after.
@@ -816,7 +831,7 @@ def _ops_deploy_evidence(entry, abspath):
     real_art_dir = os.path.realpath(art_dir)
     if real_target == real_art_dir or real_target.startswith(real_art_dir + os.sep):
         return False, (f"deploy_target {target} resolves inside {art_dir} — the artifact's own "
-                       f"shipped payload cannot prove its own delivery")
+                       f"shipped payload cannot prove its own delivery"), None
     # wq#2813: realpath does not see through a hard link — a deploy_target outside art_dir
     # that shares an inode with a shipped file is still the artifact's own payload, not a
     # deployed copy. Checked against every shipped file before any byte-match, so a duplicate
@@ -830,7 +845,7 @@ def _ops_deploy_evidence(entry, abspath):
                 same = False
             if same:
                 return False, (f"deploy_target {target} is a hard link to {cand} — the "
-                               f"artifact's own shipped payload cannot prove its own delivery")
+                               f"artifact's own shipped payload cannot prove its own delivery"), None
     target_hash = _sha256(target)
     for root, _dirs, files in os.walk(art_dir):
         for name in files:
@@ -839,7 +854,7 @@ def _ops_deploy_evidence(entry, abspath):
             cand = os.path.join(root, name)
             if target_hash is not None and _sha256(cand) == target_hash:
                 return _ops_deploy_verify(entry, target, cand)
-    return False, f"deploy_target {target} matches no file shipped in {art_dir}"
+    return False, f"deploy_target {target} matches no file shipped in {art_dir}", None
 
 
 # wq#2762 (ISSUE-LOG #859): a deploy_target byte-match only proves the artifact's payload
@@ -861,11 +876,11 @@ def _ops_deploy_verify(entry, target, cand):
                        f"live state still held or that the install was tried read-only "
                        f"first; add a 'deploy_verify' field naming both a 'premise: "
                        f"<re-check against live state>' and a 'probe: <dry-run/read-only "
-                       f"check against the real target>'")
+                       f"check against the real target>'"), None
     if not (_DEPLOY_VERIFY_PREMISE_RE.search(verify) and _DEPLOY_VERIFY_PROBE_RE.search(verify)):
         return False, (f"deploy_verify {verify!r} must name both a 'premise: <re-check>' and "
-                       f"a 'probe: <dry-run/read-only check>' against the real target")
-    return True, f"{target} byte-matches {cand}; deploy_verify={verify!r}"
+                       f"a 'probe: <dry-run/read-only check>' against the real target"), None
+    return True, f"{target} byte-matches {cand}; deploy_verify={verify!r}", None
 
 
 # wq#2753 (ISSUE-LOG #728): a legitimately cross-repo change (wq#2624 landed in
@@ -917,34 +932,41 @@ def _crossrepo_citation(entry, rel, start, end):
 
 
 def _check_citation(entry, worktree, changed):
+    """Returns (ok, why, tail, root_apply_followup). `root_apply_followup` is a
+    {"bundle", "install_path", "why"} dict when an ops-bundle citation closed via the
+    wq#4778 `no_deploy_needed` override, else None — the caller (verify(), then
+    fworker.py one layer up) files/reuses the follow-up ticket this module itself never
+    touches wq to create."""
     cite = str(entry.get("citation") or "").strip()
     m = _CITATION_RE.match(cite)
     if not m:
-        return False, f"citation {cite!r} is not file:line", ""
+        return False, f"citation {cite!r} is not file:line", "", None
     rel = m.group("path")
     start = int(m.group("start"))
     end = int(m.group("end") or start)
     if entry.get("repo"):
         ok, why = _crossrepo_citation(entry, rel, start, end)
-        return ok, why, ""
+        return ok, why, "", None
     abspath = os.path.realpath(os.path.join(worktree, rel))
     if not abspath.startswith(os.path.realpath(worktree) + os.sep):
-        return False, "citation path escapes the worktree", ""
+        return False, "citation path escapes the worktree", "", None
     if not os.path.isfile(abspath):
-        return False, f"{rel} does not exist", ""
+        return False, f"{rel} does not exist", "", None
     with open(abspath, errors="replace") as f:
         n_lines = sum(1 for _ in f)
     if start < 1 or end < start or end > n_lines:
-        return False, f"{rel} has {n_lines} lines; cited {start}-{end}", ""
+        return False, f"{rel} has {n_lines} lines; cited {start}-{end}", "", None
     norm = os.path.normpath(rel)
     if norm not in {os.path.normpath(c) for c in changed}:
-        return False, f"{rel} is not touched by this branch's diff", ""
+        return False, f"{rel} is not touched by this branch's diff", "", None
     install = _ops_bundle_install(os.path.realpath(worktree), norm)
     if install:
-        ok, why = _ops_deploy_evidence(entry, install)
+        ok, why, followup = _ops_deploy_evidence(entry, install)
         if not ok:
-            return False, why, ""
-    return True, f"{rel}:{start}-{end} in diff", ""
+            return False, why, "", None
+        if followup:
+            return True, why, "", followup
+    return True, f"{rel}:{start}-{end} in diff", "", None
 
 
 # wq#3035 (wq#2922 root cause): _check_citation above proves a citation matches the
@@ -1056,12 +1078,15 @@ def verify(acceptance, evidence, worktree, base_ref="origin/main", evidence_dir=
                       "claimed": entry.get("exit_code"), "replay_log": log_path,
                       "output_tail": tail}
         else:
-            ok, observed, tail = _check_citation(entry, worktree, changed)
+            ok, observed, tail, followup = _check_citation(entry, worktree, changed)
             record = {"id": cid, "text": c.get("text", ""),
                       "expected": "file:line inside this branch's diff",
                       "observed": observed,
                       "repro": "git diff --name-only $(git merge-base HEAD origin/main)..HEAD",
                       "claimed": entry.get("citation"), "output_tail": tail}
+            if followup:
+                record["root_apply_followup"] = followup
+                result.setdefault("root_apply_followups", []).append(followup)
         record["ok"] = ok
         result["checked"].append(record)
         if not ok:

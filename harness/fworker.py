@@ -883,6 +883,51 @@ def wq_done(ticket_id, notes, no_artifact_reason=None, unlanded_reason=None):
         raise RuntimeError(f"wq done {ticket_id} refused (exit {p.returncode}): {out.strip()}")
 
 
+_ROOT_APPLY_ADDED_RE = re.compile(r"^added task (\d+)")
+_ROOT_APPLY_DUP_RE = re.compile(r"^DUPLICATE — task (\d+)")
+
+
+def _ops_root_apply_title(bundle):
+    return f"[ops-root-apply] {bundle}: install.sh --verify fails, needs privileged install"
+
+
+def file_root_apply_followups(ticket_id, lane, followups):
+    """wq#4778 (ISSUE-LOG #1636): acceptance.verify()'s citation gate now accepts a
+    `no_deploy_needed` override on an ops-bundle citation (same shape as wq done's own
+    --no-deploy-needed, wq#1724/wq#3487) for exactly the case a sandboxed BUILD worker
+    hits — no ssh/fleet-exec grant onto the live host, deploy target outside every
+    worktree's allowed dirs. acceptance.py stays "no wq, no dispatch" (its own module
+    docstring) and only hands back a followup descriptor per citation; this is the one
+    layer up that actually owns wq, so it is the one that files or reuses the tracked
+    follow-up — `wq add`'s own normalized-title dedup (cmd_add) collapses repeated
+    closes against the same still-undeployed bundle onto one ticket, same as the
+    `_file_or_reuse_root_apply_followup` shape `wq done` already uses. Best effort: a
+    filing failure here is never a reason to fail a replay that otherwise passed.
+    """
+    filed = []
+    for f in followups or []:
+        bundle = f.get("bundle") or "?"
+        install_path = f.get("install_path") or "?"
+        why = f.get("why") or "no_deploy_needed"
+        title = _ops_root_apply_title(bundle)
+        detail = (f"wq#{ticket_id}'s evidence citation closed over {install_path} with "
+                  f"no_deploy_needed={why!r}. Run the bundle's install.sh as root (or with "
+                  f"sudo), then confirm with `bash {install_path} --verify`.\n"
+                  f"Liveness: ops_verified({bundle})")
+        p = wq("add", "--lane", lane, "--title", title, "--detail", detail)
+        out = (p.stdout or "") + (p.stderr or "")
+        m = _ROOT_APPLY_ADDED_RE.search(out) or _ROOT_APPLY_DUP_RE.search(out)
+        if m:
+            filed.append(int(m.group(1)))
+        else:
+            log(f"wq#{ticket_id}: wq#4778 root-apply follow-up filing for {bundle} "
+                f"produced no parseable ticket id ({out.strip()!r}) — not blocking")
+    if filed:
+        wq("note", str(ticket_id),
+           "[ROOT-APPLY-FILED: " + ", ".join(f"wq#{i}" for i in filed) + "]")
+    return filed
+
+
 def wq_release(ticket_id):
     wq("release", str(ticket_id))
 
@@ -4916,6 +4961,13 @@ def verify_done(ticket_id, worktree, attempt, base_ref="origin/main"):
 
     if result["ok"]:
         _clear_rejection(ticket_id)
+        followups = result.get("root_apply_followups")
+        if followups:
+            lane = wq_show(ticket_id).get("lane") or "build"
+            filed = file_root_apply_followups(ticket_id, lane, followups)
+            if filed:
+                log(f"wq#{ticket_id}: wq#4778 filed/reused root-apply follow-up(s) "
+                    f"{', '.join(f'wq#{i}' for i in filed)} for no_deploy_needed citation(s)")
         log(f"wq#{ticket_id}: evidence replay PASSED "
             f"({len(result['checked'])} criteria re-run/re-checked by the harness)")
         return True, False
