@@ -72,6 +72,7 @@ allow:
     - /home/lumen/autonomy/agent5     # wq#1779: narrow grant, sweep hits=0 (45 files, .py source), DGM retirement
     - /home/lumen/minerva/eval   # wq#1738: narrow grant, sweep hits=0 (508 files), NOT the parent minerva (credentials in context/sections)
     - /home/lumen/scratch/research_prompts  # wq#4691: dead /home/lumen/research_prompts replaced with real inbox, sweep hits=2 both false positives (§3.5)
+    - /home/lumen/research_prompts           # wq#4700: restored — real dir (15 files), incorrectly dropped by wq#4691
     - /home/lumen/decisions
     - /home/lumen/instructions
     - /home/lumen/security

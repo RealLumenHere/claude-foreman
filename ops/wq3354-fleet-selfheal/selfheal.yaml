@@ -98,6 +98,7 @@ nodes:                  # CLASS 6
                    # probe], now removed): neith is no longer in the mcpw backend pool,
                    # so a tailscale outage here has no ops impact. Frank off-decision,
                    # same class as apis/pbox/seshat/be3600.
+    - khnum        # RETIRED 2026-10-27 (Frank, orch-12). Commander standby role superseded by cloud. lifecycle=retired in state.
   sleepers:                        # wq#3702: nodes that power THEMSELVES off when idle.
     - hathor                       # Dark-while-off is by design and files nothing; dark
                                    # while answering on lan_ip is the tailscaled boot race
