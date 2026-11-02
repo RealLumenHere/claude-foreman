@@ -68,6 +68,9 @@ providers:              # CLASS 5
   recheck_interval_s: 300         # re-probe only hosts already failing auth
   disable_after_s: 600
   cooldown_s: 21600               # refreshed every recheck while still failing
+  quota_cooldown_s: 1800          # fallback when the provider gives no retryDelay (wq#4807)
+  quota_ticket_after_per_day: 3   # recurring quota hits this often/day -> capacity ticket
+  rate_limited_cooldown_s: 30     # generic 429, no quota body: short backoff, never a ticket
   litellm_config: /home/lumen/agent/litellm_config.yaml
   env_path: /home/lumen/.secrets/litellm-service-keys/env/sentinel.env   # master key is retired on LLM routes (wq#914); probe with the sentinel virtual key (same LITELLM_MASTER_KEY var name)
   gateway_url: http://localhost:4000/v1/chat/completions

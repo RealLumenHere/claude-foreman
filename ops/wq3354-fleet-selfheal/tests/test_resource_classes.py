@@ -90,6 +90,12 @@ PROVIDER_401 = (401, '{"error": {"message": "litellm.AuthenticationError: '
                      'DeepseekException - invalid api key"}}')
 PROVIDER_402 = (402, '{"error": {"message": "litellm.BadRequestError: '
                      'DeepseekException - Insufficient Balance"}}')
+PROVIDER_429_QUOTA = (429, '{"error": {"code": 429, "message": "You exceeded your '
+                     'current quota", "status": "RESOURCE_EXHAUSTED", "details": '
+                     '[{"@type": "type.googleapis.com/google.rpc.QuotaFailure", '
+                     '"violations": [{"quotaMetric": "generate_requests_per_day"}]}, '
+                     '{"@type": "type.googleapis.com/google.rpc.RetryInfo", '
+                     '"retryDelay": "24s"}]}}')
 
 
 def test_classify_tells_provider_auth_from_gateway_auth():
@@ -100,8 +106,10 @@ def test_classify_tells_provider_auth_from_gateway_auth():
         401, '{"detail":"Authentication Error, Invalid proxy server token passed"}') \
         == "gateway-auth"
     assert sh_providers.classify(*PROVIDER_402) == "billing"
-    assert sh_providers.classify(429, "rate limited") == "error"
+    assert sh_providers.classify(429, "rate limited") == "rate_limited"
+    assert sh_providers.classify(*PROVIDER_429_QUOTA) == "quota"
     assert sh_providers.classify(None, "timed out") == "error"
+    assert sh_providers.classify(500, "upstream error") == "error"
 
 
 def test_provider_401_for_ten_minutes_cools_its_rungs_then_recovery_reenables(make_ctx, tmp_path):
@@ -209,6 +217,59 @@ def test_every_host_401_is_our_gateway_key_and_disables_nothing(make_ctx, tmp_pa
     [t] = ctx.out.tickets
     assert "master key" in t["title"]
     assert not (tmp_path / "cooldown.json").exists()
+
+
+def test_retry_cooldown_parses_provider_retry_delay_and_clamps_and_jitters():
+    zero_jitter = lambda: 0.5  # noqa: E731  (rand()*2-1 == 0)
+    assert sh_providers._parse_retry_delay_s(PROVIDER_429_QUOTA[1]) == 24.0
+    assert sh_providers._parse_retry_delay_s("no retry info here") is None
+    # below the floor: clamps up to MIN_COOLDOWN_S
+    assert sh_providers._retry_cooldown_s(PROVIDER_429_QUOTA[1], 1800, rand=zero_jitter) == 30
+    # absent: falls back to the fixed timer
+    assert sh_providers._retry_cooldown_s("no retry info", 1800, rand=zero_jitter) == 1800
+    # above the ceiling: clamps down to MAX_COOLDOWN_S
+    huge = '{"retryDelay": "99999s"}'
+    assert sh_providers._retry_cooldown_s(huge, 1800, rand=zero_jitter) == 6 * 3600
+    # jitter moves the result by up to +-10%, never outside the clamp
+    hi = sh_providers._retry_cooldown_s("no retry info", 1800, rand=lambda: 1.0)
+    lo = sh_providers._retry_cooldown_s("no retry info", 1800, rand=lambda: 0.0)
+    assert hi == 1980 and lo == 1620
+
+
+def test_quota_429_cools_down_immediately_and_tickets_only_once_it_recurs(make_ctx, tmp_path):
+    cfg = _pcfg(tmp_path)
+    cd = tmp_path / "cooldown.json"
+    state, t0 = {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_429_QUOTA, "api.z.ai": (200, "")}
+    ctx = make_ctx(cfg, state, now=t0)
+    _psweep(ctx, bad)                                           # first hit: cool, no ticket
+    data = json.loads(cd.read_text())
+    assert data["deepseek-v4-flash"]["source"] == "fleet-selfheal"
+    assert "quota" in data["deepseek-v4-flash"]["reason"]
+    assert 30 <= data["deepseek-v4-flash"]["until"] - t0 <= 6 * 3600
+    assert ctx.out.tickets == []
+    for i in range(1, 4):                                       # 3 more hits inside 24h
+        ctx = make_ctx(cfg, state, now=t0 + i * 1800)
+        _psweep(ctx, bad)
+    [t] = ctx.out.tickets                                       # 4th hit: capacity ticket
+    assert "quota exhausted 4x in 24h" in t["title"]
+    assert "rotate" not in t["title"].lower() and t["pri"] == "p3"
+    good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
+    ctx = make_ctx(cfg, state, now=t0 + 5 * 1800)
+    _psweep(ctx, good)
+    assert json.loads(cd.read_text()) == {}
+    assert "provider-quota:api.deepseek.com" not in state["tickets"]
+
+
+def test_generic_429_without_quota_body_is_a_short_backoff_never_a_ticket(make_ctx, tmp_path):
+    cfg = _pcfg(tmp_path)
+    cd = tmp_path / "cooldown.json"
+    ctx = make_ctx(cfg, {}, now=100_000)
+    _psweep(ctx, {"api.deepseek.com": (429, "rate limited"), "api.z.ai": (200, "")})
+    data = json.loads(cd.read_text())
+    assert "rate limited" in data["deepseek-v4-flash"]["reason"]
+    assert data["deepseek-v4-flash"]["until"] - 100_000 <= 120
+    assert ctx.out.tickets == []
 
 
 def test_hosts_from_config_groups_chat_models_and_skips_embeddings(tmp_path):

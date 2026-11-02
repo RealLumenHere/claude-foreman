@@ -29,10 +29,23 @@ non-done/released ticket whose title names the same provider + "balance" (e.g.
 litellm-completion-probe, wq#3169, files its own under a different episode key, so
 file_once's per-key dedup never sees it) and reuses that ticket's id for the episode
 instead of filing a duplicate (wq#3577 duplicated wq#3557 this way on 2026-10-07).
+
+A 429 is not a key problem (wq#4807): a free-tier RPD cap (Gemini's RESOURCE_EXHAUSTED,
+quotaMetric in the body) is QUOTA — cool the rung down for the provider's own retryDelay
+(parsed from the body, clamped to [30s, 6h] with +-10% jitter so every rung on the same
+host doesn't wake up in the same instant, falling back to `quota_cooldown_s` when the
+body has no retryDelay) and only file a ticket if it recurs more than
+`quota_ticket_after_per_day` times in 24h — that's a capacity signal (upgrade tier or add
+a fallback rung), not a "rotate the key" ticket, since rotating a key never clears a quota.
+A 429 with no quota markers is a generic RATE_LIMITED: a short fixed backoff, never a
+ticket. Both cooldowns are stored as an absolute `until` epoch, so they self-expire the
+next time router.py checks them — unlike auth/billing, nothing here needs to persist
+until a human rotates a key or tops up a balance.
 """
 import collections
 import json
 import os
+import random
 import re
 import urllib.error
 import urllib.request
@@ -41,7 +54,11 @@ from urllib.parse import urlparse
 CLS = "providers"
 SKIP_SUBSTRINGS = ("embed", "rerank", "whisper", "tts")
 GATEWAY_MARKERS = ("invalid proxy server token", "proxy server token", "no api key passed in")
+QUOTA_MARKERS = ("quotaMetric", "RESOURCE_EXHAUSTED")
 SOURCE = "fleet-selfheal"
+MIN_COOLDOWN_S = 30
+MAX_COOLDOWN_S = 6 * 3600
+QUOTA_HIT_WINDOW_S = 24 * 3600
 
 
 def hosts_from_config(path):
@@ -72,15 +89,36 @@ def read_master_key(env_path):
 
 def classify(status, body):
     """'ok' | 'auth' (provider rejected the key) | 'billing' (provider balance
-    exhausted) | 'gateway-auth' | 'error'."""
+    exhausted) | 'quota' (provider-side rate/quota cap, e.g. RESOURCE_EXHAUSTED —
+    cools down and clears on its own, no key problem) | 'rate_limited' (generic 429,
+    short backoff, never a ticket) | 'gateway-auth' | 'error' (timeouts, 5xx)."""
     if status is not None and 200 <= status < 300:
         return "ok"
     if status == 402:
         return "billing"
+    if status == 429:
+        return "quota" if any(m in (body or "") for m in QUOTA_MARKERS) else "rate_limited"
     if status in (401, 403):
         low = (body or "").lower()
         return "gateway-auth" if any(g in low for g in GATEWAY_MARKERS) else "auth"
     return "error"
+
+
+def _parse_retry_delay_s(body):
+    """Seconds from a provider RetryInfo body (Google's `"retryDelay": "34s"`), or
+    None when absent/unparseable."""
+    m = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s?"', body or "")
+    return float(m.group(1)) if m else None
+
+
+def _retry_cooldown_s(body, fallback_s, rand=random.random):
+    """Cooldown duration: the provider's own retryDelay when present, else
+    `fallback_s`, clamped to [MIN_COOLDOWN_S, MAX_COOLDOWN_S] and jittered +-10% so
+    every rung on one host doesn't wake up in the same instant."""
+    delay = _parse_retry_delay_s(body)
+    base = max(MIN_COOLDOWN_S, min(delay if delay is not None else fallback_s, MAX_COOLDOWN_S))
+    jittered = base + (rand() * 2 - 1) * 0.10 * base
+    return max(MIN_COOLDOWN_S, min(jittered, MAX_COOLDOWN_S))
 
 
 def probe(url, key, model, timeout=60):
@@ -138,7 +176,8 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
     targets = list(hosts) if full_due else [h for h in hosts if h in failing]
     key = key_reader(p.get("env_path", "/home/lumen/agent/.env"))
     url = p.get("gateway_url", "http://localhost:4000/v1/chat/completions")
-    results = {h: classify(*prober(url, key, hosts[h][0])) for h in targets}
+    probed = {h: prober(url, key, hosts[h][0]) for h in targets}
+    results = {h: classify(*probed[h]) for h in targets}
     st["last_recheck"] = int(ctx.now)
     if full_due:
         st["last_full"] = int(ctx.now)
@@ -157,6 +196,9 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
 
     disable_after = int(p.get("disable_after_s", 600))
     hold_s = int(p.get("cooldown_s", 6 * 3600))
+    quota_fallback_s = int(p.get("quota_cooldown_s", 1800))
+    quota_ticket_after = int(p.get("quota_ticket_after_per_day", 3))
+    rate_limited_fallback_s = int(p.get("rate_limited_cooldown_s", 30))
     cooldown_path = p.get("cooldown_path",
                           "/home/lumen/foreman/dispatcher/runtime/backend_cooldown.json")
     to_set, to_drop = {}, []
@@ -209,6 +251,35 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                                   f"fleet-selfheal re-enables the rungs on the first good "
                                   f"probe.",
                                   page="high")
+        elif verdict == "quota":
+            hits = [t for t in hs.get("quota_hits", []) if ctx.now - t < QUOTA_HIT_WINDOW_S]
+            hits.append(int(ctx.now))
+            hs["quota_hits"] = hits
+            hs["quota_models"] = models
+            cooldown = _retry_cooldown_s(probed[host][1], quota_fallback_s)
+            for m in models:
+                to_set[m] = {"until": int(ctx.now + cooldown), "source": SOURCE,
+                             "reason": f"{host} 429 quota exhausted (wq#4807)"}
+            ctx.note(CLS, f"{host} quota exhausted; cooldown {int(cooldown)}s "
+                          f"({len(hits)}x in 24h)")
+            if len(hits) > quota_ticket_after:
+                ctx.file_once(CLS, f"provider-quota:{host}",
+                              f"[selfheal] {host} quota exhausted {len(hits)}x in 24h "
+                              f"— capacity, not a key problem",
+                              f"LiteLLM upstream {host} has answered 429 RESOURCE_EXHAUSTED "
+                              f"{len(hits)} times in the last 24h. Rungs {', '.join(models)} "
+                              f"are cooled down until the provider's own retry window "
+                              f"passes; no action is required unless this keeps recurring. "
+                              f"If it does, it's a capacity signal — upgrade the provider "
+                              f"tier or add a fallback rung. Rotating the key will not "
+                              f"help: this is a quota cap, not an auth failure.",
+                              pri="p3")
+        elif verdict == "rate_limited":
+            cooldown = _retry_cooldown_s(probed[host][1], rate_limited_fallback_s)
+            for m in models:
+                to_set[m] = {"until": int(ctx.now + cooldown), "source": SOURCE,
+                             "reason": f"{host} 429 rate limited (wq#4807)"}
+            ctx.note(CLS, f"{host} rate limited; short backoff {int(cooldown)}s")
         elif verdict == "ok":
             if hs.pop("disabled", None):
                 to_drop.extend(models)
@@ -220,7 +291,11 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
             if hs.pop("first_billing", None) is not None:
                 ctx.resolve(CLS, f"provider-billing:{host}", f"{host} answers again; "
                             f"rungs {', '.join(models)} re-enabled.")
-        # 'error' (timeouts, 5xx, 429) is not a key problem: leave the episode as is.
+            if hs.pop("quota_models", None):
+                to_drop.extend(models)
+                ctx.resolve(CLS, f"provider-quota:{host}", f"{host} answers again; "
+                            f"rungs {', '.join(models)} re-enabled.")
+        # 'error' (timeouts, 5xx) is not a key problem: leave the episode as is.
     if to_set or to_drop:
         ctx.act(CLS, f"cooldown set={sorted(to_set)} drop={sorted(to_drop)}",
                 _write_cooldown, cooldown_path, to_set, to_drop)
