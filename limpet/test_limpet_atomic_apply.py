@@ -1,7 +1,9 @@
 """Unit tests for atomic_apply.run_transaction with an injected runner/clock
 (no real subprocess, no real wall clock). (wq#4828.)"""
 import subprocess
+import unittest.mock as mock
 
+import atomic_apply
 from atomic_apply import FileChange, run_transaction
 
 
@@ -101,6 +103,75 @@ def test_health_check_timeout_is_treated_as_failure(tmp_path):
     assert res.committed is False
     assert "timed out after 5s" in res.reason
     assert target.read_bytes() == b"old\n"
+
+
+def test_second_file_write_failure_rolls_back_first_file_unharmed(tmp_path):
+    a = tmp_path / "a.yaml"
+    b = tmp_path / "b.yaml"
+    a.write_text("a-old\n")
+    b.write_text("b-old\n")
+    orig_write_atomic = atomic_apply._write_atomic
+    calls = []
+
+    def flaky_write(target, content):
+        calls.append(target)
+        if target == b:
+            raise PermissionError("no write perms")
+        orig_write_atomic(target, content)
+
+    with mock.patch.object(atomic_apply, "_write_atomic", flaky_write):
+        res = run_transaction(
+            [FileChange(a, b"a-new\n"), FileChange(b, b"b-new\n")],
+            health_check="probe",
+            staging_dir=str(tmp_path / "stage"),
+            runner=lambda cmd, t: (0, "ok"),
+            now=3.0,
+        )
+    assert res.committed is False
+    assert "apply failed" in res.reason
+    assert a.read_bytes() == b"a-old\n"
+    assert b.read_bytes() == b"b-old\n"
+
+
+def test_runner_raising_uncaught_exception_type_is_rolled_back(tmp_path):
+    target = tmp_path / "f.yaml"
+    target.write_text("old\n")
+
+    def boom(cmd, t):
+        raise ValueError("unexpected runner failure")
+
+    res = run_transaction(
+        [FileChange(target, b"new\n")],
+        health_check="probe",
+        staging_dir=str(tmp_path / "stage"),
+        runner=boom,
+        now=4.0,
+    )
+    assert res.committed is False
+    assert "apply failed" in res.reason
+    assert target.read_bytes() == b"old\n"
+
+
+def test_rollback_cmd_timeout_does_not_escape_and_is_logged(tmp_path):
+    target = tmp_path / "f.yaml"
+    target.write_text("old\n")
+
+    def runner(cmd, t):
+        if cmd == "probe":
+            return (1, "boom")
+        raise subprocess.TimeoutExpired(cmd, t)
+
+    res = run_transaction(
+        [FileChange(target, b"new\n")],
+        health_check="probe",
+        rollback_cmd="restart-service",
+        staging_dir=str(tmp_path / "stage"),
+        runner=runner,
+        now=5.0,
+    )
+    assert res.committed is False
+    assert target.read_bytes() == b"old\n"
+    assert "rollback_cmd failed" in res.reason
 
 
 def test_multi_file_transaction_rolls_back_all_files_together(tmp_path):
