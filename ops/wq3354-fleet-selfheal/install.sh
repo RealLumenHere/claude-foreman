@@ -64,7 +64,10 @@ fi
 
 [ "$(id -u)" = 0 ] || { echo "must run as root (unit install + enable)"; exit 1; }
 
-python3 -m pytest -q "$SRC/tests" >/dev/null 2>&1 \
+# wq#4815: as root, python3 has no HOME and can't see lumen's --user site-packages
+# (e.g. ruamel.yaml, imported by selfheal_merge.py) — run the test suite as lumen,
+# same as the merge step below already does, not as root.
+runuser -u lumen -- python3 -m pytest -q "$SRC/tests" >/dev/null 2>&1 \
   || { echo "REFUSING: $SRC/tests does not pass on this checkout"; exit 1; }
 
 install -d -o lumen -g lumen -m 0755 "$DEST"
