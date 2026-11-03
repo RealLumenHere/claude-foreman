@@ -183,7 +183,16 @@ nodes:                  # CLASS 6
        random faults. Re-probed from lumen at 17:02Z: 192.168.8.204:22/8443 EHOSTUNREACH,
        100.120.105.55:22 timeout, gateway 192.168.8.1:80 open. Same state as wq#4775, with
        the same missing remote path. wq#4776 [frank-hw] is still open and now carries the
-       time-of-day pattern. Classification unchanged until it answers."
+       time-of-day pattern. Classification unchanged until it answers.
+      wq#4822 (2026-11-03, LastSeen 00:50Z): FOURTH occurrence, back on the tailnet between
+       pages again (a fresh ticket only files after sh_nodes saw it reappear). This drop is at
+       00:50Z, not ~16:00Z, so the daily same-hour pattern from wq#4780 does not hold; a
+       timer plug is less likely than Frank powering it by hand or a flaky upstream link.
+       Re-probed from lumen at 01:24Z: 192.168.8.204:22 timeout, :8443 EHOSTUNREACH,
+       100.120.105.55:22 timeout, gateway 192.168.8.1:80 open. Same dark-on-LAN state, same
+       missing remote path. wq#4776 [frank-hw] still open and unclaimed. Classification
+       unchanged: four intermittent drops with recovery in between are not a permanent break
+       (ignore) and there is no idle timer (sleepers)."
     sia: "wq#4437: offline on tailscale since 2026-10-20T02:20:00Z (30+ min). lumen_state's
        sia.status='HEALTHY' (docker containers up 12h+, Miniflux news pipeline + PG17) and
        sia.provision_status='COMPLETE' are both dated 2026-07-10/11 -- over 3 months stale,
