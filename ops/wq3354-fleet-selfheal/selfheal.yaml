@@ -244,6 +244,25 @@ nodes:                  # CLASS 6
        a real page, not a nap. This note just carries the context so the next page
        doesn't re-derive it or redispatch fresh build work against an already-exhausted
        remote diagnosis."
+    sobek: "wq#4817 (2026-11-03): offline on tailscale since 2026-11-03T00:20:00.1Z (30+
+       min). sobek.power_plug='none -- UNMETERED, on no Tapo plug (the p5 assumption was
+       wrong)' (since 2026-09-10) is [UNVERIFIABLE -- no probe], same as every other
+       sobek.* fact including sobek.role. Checked `lumen_state.py history sobek
+       availability`: online+stable as of 2026-09-24 ('frank+ts-verify'), then
+       availability=available since 2026-09-29 -- no toggle history like maksoor's, so
+       this is the first selfheal page recorded for this node, not a repeat. sobek.role =
+       'Dedicated vault standby (PG streaming replica of Ma'at + parked VW promote
+       payload)' and sobek.pg_role confirms it was an active streaming replica
+       (sobek_slot, timeline 7, lag 0) as of the 2026-09-28 rebuild (wq#2918) -- live vault
+       infra, not idle hardware. No Frank power_policy/auto_sleep fact like hathor's and no
+       Frank off-decision like apis/pbox/seshat/be3600/3dprinter -- nothing on record marks
+       sobek as meant to be off or self-idling, and being unmetered (no smart plug) means
+       there is no remote power-read or power-cycle path either way (same gap as
+       ptah/khnum/rt-ax86u). On the facts actually on record this stays a live fleet node
+       held to the same bar as rt-ax86u/farida/sia/toilet: one unexplained outage with no
+       ignore/sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers
+       -- losing the vault standby silently would be worse than one noisy page. This note
+       just carries the context so the next page on sobek doesn't re-derive it."
     toilet: "wq#4638 (2026-10-25): offline on tailscale since 2026-10-25T21:00:00.1Z (30+
        min). lumen_state's toilet.status='online' is dated 2026-06-17 and flagged
        [UNVERIFIABLE -- no probe], same as every other toilet.* fact (hostname, lan_ip,
