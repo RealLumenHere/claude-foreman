@@ -112,11 +112,14 @@ def test_second_file_write_failure_rolls_back_first_file_unharmed(tmp_path):
     b.write_text("b-old\n")
     orig_write_atomic = atomic_apply._write_atomic
     calls = []
+    b_calls = []
 
     def flaky_write(target, content):
         calls.append(target)
         if target == b:
-            raise PermissionError("no write perms")
+            b_calls.append(target)
+            if len(b_calls) == 1:
+                raise PermissionError("no write perms")
         orig_write_atomic(target, content)
 
     with mock.patch.object(atomic_apply, "_write_atomic", flaky_write):
@@ -131,6 +134,80 @@ def test_second_file_write_failure_rolls_back_first_file_unharmed(tmp_path):
     assert "apply failed" in res.reason
     assert a.read_bytes() == b"a-old\n"
     assert b.read_bytes() == b"b-old\n"
+    assert "restore" not in res.reason
+
+
+def test_non_oserror_during_restore_is_best_effort_not_raised(tmp_path):
+    a = tmp_path / "a.yaml"
+    b = tmp_path / "b.yaml"
+    a.write_text("a-old\n")
+    b.write_text("b-old\n")
+    orig_write_atomic = atomic_apply._write_atomic
+    calls = []
+
+    def flaky_write(target, content):
+        calls.append(target)
+        if target == a and content == b"a-new\n":
+            orig_write_atomic(target, content)
+            return
+        if target == b and content == b"b-new\n":
+            orig_write_atomic(target, content)
+            return
+        if target == a:
+            # restore call for a
+            raise RuntimeError("restore blew up")
+        orig_write_atomic(target, content)
+
+    rollback_calls = []
+
+    def runner(cmd, t):
+        if cmd == "rollback-service":
+            rollback_calls.append(cmd)
+            return (0, "restarted")
+        return (1, "boom")
+
+    with mock.patch.object(atomic_apply, "_write_atomic", flaky_write):
+        res = run_transaction(
+            [FileChange(a, b"a-new\n"), FileChange(b, b"b-new\n")],
+            health_check="probe",
+            rollback_cmd="rollback-service",
+            staging_dir=str(tmp_path / "stage"),
+            runner=runner,
+            now=5.0,
+        )
+
+    assert res.committed is False
+    assert b.read_bytes() == b"b-old\n"
+    assert rollback_calls == ["rollback-service"]
+    assert "restore" in res.reason
+    assert str(a) in res.reason
+
+
+def test_nul_byte_path_during_restore_is_best_effort_not_raised(tmp_path):
+    good = tmp_path / "good.yaml"
+    good.write_text("good-old\n")
+    bad = tmp_path / "bad-\x00-name.yaml"
+
+    rollback_calls = []
+
+    def runner(cmd, t):
+        if cmd == "rollback-service":
+            rollback_calls.append(cmd)
+            return (0, "restarted")
+        return (1, "boom")
+
+    res = run_transaction(
+        [FileChange(good, b"good-new\n"), FileChange(bad, b"bad-new\n")],
+        health_check="probe",
+        rollback_cmd="rollback-service",
+        staging_dir=str(tmp_path / "stage"),
+        runner=runner,
+        now=6.0,
+    )
+
+    assert res.committed is False
+    assert good.read_bytes() == b"good-old\n"
+    assert rollback_calls == ["rollback-service"]
 
 
 def test_runner_raising_uncaught_exception_type_is_rolled_back(tmp_path):

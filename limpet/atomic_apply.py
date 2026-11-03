@@ -173,7 +173,7 @@ def run_transaction(
                 _write_atomic(target, snap_path.read_bytes())
             else:
                 target.unlink(missing_ok=True)
-        except OSError as exc:
+        except Exception as exc:
             restore_errors.append(f"restore {target} failed: {exc}")
 
     if rollback_cmd:
