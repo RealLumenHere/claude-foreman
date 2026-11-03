@@ -16,7 +16,7 @@ import json
 import os
 import socket
 
-from . import queue
+from . import cas, queue
 from .canonical import file_sha256
 from .errors import OpsApplyError
 from .recipes import get_recipe
@@ -32,7 +32,7 @@ class NodeServer:
                  work_dir, backup_root, verify_fn, allowed_signers_path,
                  recipe_file_sha256, pinned_hostname, pinned_machine_id,
                  reported_machine_id, never_nodes, config_path=None,
-                 runner=None, clock=None, http_get=None):
+                 runner=None, clock=None, http_get=None, cas_root=None):
         self.catalog = catalog
         self.policy = policy
         self.policy_sha_actual = policy_sha_actual
@@ -50,6 +50,34 @@ class NodeServer:
         self._runner = runner
         self._clock = clock
         self._http_get = http_get
+        self.cas_root = cas_root
+
+    def _verify_artifacts(self, manifest, artifact_content):
+        """wq#4829 apply-time CAS check, run after signature verification
+        and before anything is staged. Forwarded bytes are stored into the
+        node's own CAS and must hash to their declared digest; every
+        declared artifact — resent or deduped — is then re-hashed on disk
+        via cas.verify. A mismatch anywhere refuses the whole apply
+        (OPS_CAS): the node never trusts that the bytes it has are the
+        bytes that were approved."""
+        artifacts = manifest.get("artifacts") or {}
+        if not artifacts:
+            return
+        if self.cas_root is None:
+            raise OpsApplyError("OPS_CAS",
+                                 "manifest declares artifacts but node has no cas_root")
+        artifact_content = artifact_content or {}
+        for name, declared in artifacts.items():
+            content = artifact_content.get(name)
+            if content is not None:
+                stored = cas.store(self.cas_root, content)
+                if stored != declared:
+                    raise OpsApplyError(
+                        "OPS_CAS",
+                        f"artifact {name!r} declares {declared} but forwarded "
+                        f"content hashes to {stored}")
+            cas.verify(self.cas_root, declared)
+            cas.record_artifact(self.cas_root, manifest["ticket"], name, declared)
 
     def _revalidate(self, manifest, digest, signature, expires_at):
         check_v3_host(manifest["node"], pinned_hostname=self.pinned_hostname,
@@ -82,6 +110,7 @@ class NodeServer:
         ticket = manifest["ticket"]
         _entry, recipe = self._revalidate(manifest, digest, envelope["signature"],
                                            envelope["expires_at"])
+        self._verify_artifacts(manifest, envelope.get("artifact_content"))
         config_path = self.config_path or recipe.TARGET_PATH
         try:
             pre_apply_sha = file_sha256(config_path)

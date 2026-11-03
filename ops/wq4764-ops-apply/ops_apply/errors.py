@@ -13,6 +13,7 @@ CODES = (
     "OPS_ARGV_DENY",
     "OPS_DIGEST",
     "OPS_TOCTOU",
+    "OPS_CAS",
 )
 
 

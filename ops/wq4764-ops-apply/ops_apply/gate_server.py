@@ -14,7 +14,7 @@ AF_UNIX accept loop with a real peer (test_gate_server.py's server tests).
 import json
 import socket
 
-from . import queue
+from . import cas, queue
 from .canonical import manifest_digest
 from .errors import OpsApplyError
 from .identity import peer_cred, read_cgroup, worker_unit_from_cgroup
@@ -30,7 +30,7 @@ class GateServer:
     def __init__(self, *, catalog, policy, policy_sha_actual, queue_dir,
                  lease_lookup, node_transport, sign_fn, recipe_file_sha256,
                  pinned_hostname, pinned_machine_id, reported_machine_id,
-                 never_nodes):
+                 never_nodes, cas_root=None):
         self.catalog = catalog
         self.policy = policy
         self.policy_sha_actual = policy_sha_actual
@@ -43,6 +43,36 @@ class GateServer:
         self.pinned_machine_id = pinned_machine_id
         self.reported_machine_id = reported_machine_id
         self.never_nodes = never_nodes
+        self.cas_root = cas_root
+
+    def _stage_artifacts(self, manifest, artifact_content):
+        """wq#4829: every artifact the manifest declares goes into the CAS
+        by its declared digest BEFORE staging. The declared digest lives
+        inside the manifest, so it is covered by V10's manifest digest and
+        later by the approval signature; the bytes themselves are pinned by
+        the CAS path. Content that hashes to anything other than its
+        declared digest is refused (OPS_CAS), as is a declared artifact
+        with no content and no existing blob — fail closed, nothing staged."""
+        artifacts = manifest.get("artifacts") or {}
+        if not artifacts:
+            return
+        if self.cas_root is None:
+            raise OpsApplyError("OPS_CAS",
+                                 "manifest declares artifacts but gate has no cas_root")
+        artifact_content = artifact_content or {}
+        for name, declared in artifacts.items():
+            content = artifact_content.get(name)
+            if content is None:
+                # dedupe path: no bytes resent, the blob must already exist
+                cas.verify(self.cas_root, declared)
+            else:
+                stored = cas.store(self.cas_root, content)
+                if stored != declared:
+                    raise OpsApplyError(
+                        "OPS_CAS",
+                        f"artifact {name!r} declares {declared} but content "
+                        f"hashes to {stored}")
+            cas.record_artifact(self.cas_root, manifest["ticket"], name, declared)
 
     def _recipe_or_raise(self, manifest):
         recipe = get_recipe(manifest["recipe"], manifest["recipe_version"])
@@ -51,10 +81,10 @@ class GateServer:
                                  f"no recipe module for {manifest['recipe']}")
         return recipe
 
-    def handle_submit(self, manifest, peer_cgroup_text):
+    def handle_submit(self, manifest, peer_cgroup_text, artifact_content=None):
         """V1-V6, V9, V10 (design: "the gate runs V1-V6, V9 and V10, and the
-        request goes STAGED"). Returns {"req": <id>} or raises
-        OpsApplyError."""
+        request goes STAGED"), then CAS-stages any declared artifacts
+        (wq#4829). Returns {"req": <id>} or raises OpsApplyError."""
         ticket = check_v1_identity(peer_cgroup_text, manifest["ticket"])
         unit = worker_unit_from_cgroup(peer_cgroup_text)
         lease = self.lease_lookup(ticket)
@@ -74,6 +104,7 @@ class GateServer:
             manifest["params"].get("hostname"), manifest["params"].get("path"))
         check_v9_argv(argv_preview, self.policy)
         digest = check_v10_digest(manifest)
+        self._stage_artifacts(manifest, artifact_content)
         req = queue.stage(self.queue_dir, manifest["ticket"], manifest, digest)
         return {"req": req, "digest": digest}
 
@@ -103,9 +134,25 @@ class GateServer:
         check_v8_signature_gate(entry, self.recipe_file_sha256)
         queue.consume(self.queue_dir, ticket, req, record["digest"])
         signature = self.sign_fn(record["digest"])
+        # wq#4829: re-read every declared artifact through cas.retrieve —
+        # a verified read, so bytes tampered between submit and approval are
+        # refused here, not shipped — then stamp the approval record onto
+        # the ticket manifest and forward the verified bytes to the node.
+        artifact_content = {}
+        for name, art_digest in (record["manifest"].get("artifacts") or {}).items():
+            if self.cas_root is None:
+                raise OpsApplyError("OPS_CAS",
+                                     "manifest declares artifacts but gate has no cas_root")
+            artifact_content[name] = cas.retrieve(self.cas_root, art_digest).decode()
+            cas.record_approval(self.cas_root, ticket, art_digest,
+                                 {"approved_by": record["approved_by"],
+                                  "approved_at": record["approved_at"],
+                                  "manifest_digest": record["digest"], "req": req})
         envelope = {"manifest": record["manifest"], "digest": record["digest"],
                     "signature": signature, "req": req,
                     "expires_at": record["expires_at"]}
+        if artifact_content:
+            envelope["artifact_content"] = artifact_content
         response = self.node_transport(envelope)
         queue.set_state(self.queue_dir, ticket, req, response["state"],
                         result=response)
@@ -154,7 +201,8 @@ def serve_one(server, conn, *, cgroup_reader=read_cgroup):
         req = json.loads(raw)
         verb = req["verb"]
         if verb == "submit":
-            result = server.handle_submit(req["manifest"], cgroup_text)
+            result = server.handle_submit(req["manifest"], cgroup_text,
+                                           artifact_content=req.get("artifact_content"))
         elif verb == "approve":
             result = server.handle_approve(req["ticket"], req["req"], cgroup_text)
         elif verb == "status":

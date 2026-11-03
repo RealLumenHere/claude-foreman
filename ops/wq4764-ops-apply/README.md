@@ -24,6 +24,15 @@ before anything is staged or applied.
 - `ops_apply/validation.py` — V1-V10, each a pure function that raises
   `OpsApplyError` on refusal. No I/O; `gate_server.py`/`node_server.py` do
   the I/O and call these in order.
+- `ops_apply/cas.py` — content-addressable store for staged artifacts
+  (wq#4829, aerynOS CAS pattern): blobs at `<cas_root>/<sha256[:2]>/<sha256>`
+  (atomic write, 0o444, dedupe by digest), ticket manifests at
+  `<cas_root>/manifests/wq<ticket>.json` (digest + metadata + approval
+  record). Default root `/home/lumen/.cas`. The gate stores declared
+  artifacts at submit and re-reads them through a verified read at forward;
+  the node re-hashes every declared digest at apply time and refuses the
+  apply (`OPS_CAS`) on any mismatch — the approval->apply TOCTOU is closed
+  because approving a digest approves exactly one byte sequence.
 - `ops_apply/queue.py` — one `flock`ed JSON file per request under
   `<queue_dir>/wq<ticket>/<req>.json`; doubles as the V7 approval record.
 - `ops_apply/recipes/cloudflared_ingress_upsert.py` — the v1 recipe:
