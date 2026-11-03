@@ -1,0 +1,22 @@
+{
+ "model": "deepseek-v4-pro",
+ "rc": 0,
+ "seconds": 5.9,
+ "n_events": 13,
+ "event_types": [
+  "final",
+  "session",
+  "status",
+  "text",
+  "thinking",
+  "tool_call",
+  "tool_result"
+ ],
+ "tool_calls": [
+  "read"
+ ],
+ "answer_ok": true,
+ "stderr_tail": "",
+ "pass": true,
+ "probed_at": "2026-11-03T06:00:18Z"
+}

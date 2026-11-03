@@ -1,0 +1,177 @@
+{
+ "base": "http://localhost:4000/v1",
+ "probed_at": "2026-11-03T05:59:00Z",
+ "results": [
+  {
+   "model": "deepseek-v4-flash",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "chunks": 13
+   },
+   "round": {
+    "ok": true,
+    "error": "",
+    "finish": "stop"
+   },
+   "pass": true,
+   "seconds": 2.6
+  },
+  {
+   "model": "deepseek-v4-pro",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "chunks": 55
+   },
+   "round": {
+    "ok": true,
+    "error": "",
+    "finish": "stop"
+   },
+   "pass": true,
+   "seconds": 5.1
+  },
+  {
+   "model": "deepseek-chat",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "chunks": 22
+   },
+   "round": {
+    "ok": true,
+    "error": "",
+    "finish": "stop"
+   },
+   "pass": true,
+   "seconds": 2.4
+  },
+  {
+   "model": "kimi-k3",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "chunks": 16
+   },
+   "round": {
+    "ok": true,
+    "error": "",
+    "finish": "stop"
+   },
+   "pass": true,
+   "seconds": 3.2
+  },
+  {
+   "model": "glm-5.3-flash",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "chunks": 5
+   },
+   "round": {
+    "ok": true,
+    "error": "",
+    "finish": "stop"
+   },
+   "pass": true,
+   "seconds": 24.7
+  },
+  {
+   "model": "gemini-flash",
+   "call": {
+    "ok": false,
+    "error": "HTTPError: HTTP Error 429: Too Many Requests"
+   },
+   "stream": {
+    "ok": false,
+    "error": "HTTPError: HTTP Error 429: Too Many Requests"
+   },
+   "round": {
+    "ok": false,
+    "error": "skipped: call failed"
+   },
+   "pass": false,
+   "seconds": 12.4
+  },
+  {
+   "model": "lumen/best",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "chunks": 30
+   },
+   "round": {
+    "ok": true,
+    "error": "",
+    "finish": "stop"
+   },
+   "pass": true,
+   "seconds": 5.2
+  },
+  {
+   "model": "lumen/fast",
+   "call": {
+    "ok": true,
+    "error": "",
+    "finish": "tool_calls",
+    "n_calls": 1
+   },
+   "stream": {
+    "ok": false,
+    "error": "no streamed tool_calls",
+    "finish": "stop",
+    "chunks": 24
+   },
+   "round": {
+    "ok": false,
+    "error": "re-called tool",
+    "finish": "tool_calls"
+   },
+   "pass": false,
+   "seconds": 3.9
+  }
+ ]
+}

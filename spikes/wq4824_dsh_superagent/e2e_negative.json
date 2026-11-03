@@ -1,0 +1,16 @@
+{
+ "model": "no-such-model-wq4824",
+ "rc": 1,
+ "seconds": 2.3,
+ "n_events": 6,
+ "event_types": [
+  "final",
+  "session",
+  "status"
+ ],
+ "tool_calls": [],
+ "answer_ok": false,
+ "stderr_tail": "dsh: UNKNOWN_MODEL: pi-ai provider \"litellm\" has no configured model \"no-such-model-wq4824\"\n",
+ "pass": false,
+ "probed_at": "2026-11-03T06:00:25Z"
+}

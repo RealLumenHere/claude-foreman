@@ -1,0 +1,24 @@
+# dsh profile overlay: route every model call through the fleet LiteLLM gateway (wq#4824).
+# Apply with `dsh --profile <name> --patch <this file>`, or copy the entries into
+# $DSH_HOME/profiles/superagent/cordis.patch.yml once the superagent profile exists.
+# The key comes from the environment variable named by apiKeyEnv; dsh_e2e.py fills it
+# from the 0600 fleet env file. Use a scoped LiteLLM virtual key for the GitHub-facing
+# superagent, never the master key (instinct 7).
+#
+# Models are pinned, not routed: toolcall_results.json shows the lumen/fast alias
+# dropping streamed tool calls, so an alias that can fall back to a weak model is not
+# safe behind an agent loop.
+- id: llm-pi-ai
+  config:
+    providers:
+      litellm:
+        apiKeyEnv: LITELLM_PILOT_KEY
+        api: openai-completions
+        baseURL: http://localhost:4000/v1
+        models:
+          - id: deepseek-v4-flash
+          - id: deepseek-v4-pro
+- id: agent-default-model
+  config:
+    provider: litellm
+    model: deepseek-v4-flash
