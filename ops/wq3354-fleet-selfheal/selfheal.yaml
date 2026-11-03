@@ -269,6 +269,28 @@ nodes:                  # CLASS 6
        held to the same bar as rt-ax86u/farida/sia: one unexplained outage with no ignore/
        sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
        note just carries the context so the next page on toilet doesn't re-derive it."
+    bes: "wq#4816 (2026-11-03): offline on tailscale since 2026-11-03T00:20:00.1Z (30+
+       min). A live reprobe this ticket (`fleet-exec run bes -- uptime`) got `ssh: connect
+       to host 100.110.156.91 port 22: Connection timed out` -- a real-time outage, not a
+       stale-read false alarm (same confirmation pattern as khnum wq#4063). lumen_state's
+       bes.status='RESTORED' text is itself dated 2026-07-18 and is a CORRECTION of a
+       prior false power-outage page: that outage was a NETWORK unplug during a Mac-move
+       cleanup (uptime stayed continuous, containers Up 6h) rather than power loss, so
+       bes being dark on tailscale now is not itself evidence it is powered down. bes is
+       a live, multi-role fleet node -- Home Assistant (:8123) + mosquitto MQTT (:1883),
+       PG standby streaming from Maat (dual standby w/ Wadjet, future promote target),
+       and host of the Grafana fleet-power dashboard behind the gated public URL
+       https://power.lumennode.uk (wq#346/wq#593) -- not parts-only or decommissioned
+       hardware. No Frank power_policy/auto_sleep fact like hathor's and no off-decision
+       like apis/pbox/seshat/be3600/3dprinter; `lumen_state.py history bes availability`
+       is empty, so this is the first selfheal page recorded for this node, not a repeat.
+       Plug P7's live state could not be read this ticket (`plugctl`/`plug-ctl` are not
+       on the BUILD allowlist -- 'This command requires approval'), so power_plug stays
+       [UNVERIFIABLE -- no probe] either way, not fleet evidence per CLAUDE.md instinct 8.
+       On the facts actually on record this stays a live, always-on fleet node held to
+       the same bar as sia/toilet/farida/rt-ax86u: one unexplained outage with no ignore/
+       sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
+       note just carries the context so the next page on bes doesn't re-derive it."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
