@@ -340,6 +340,24 @@ nodes:                  # CLASS 6
        as sia/toilet/farida/rt-ax86u/bes: one unexplained outage with no ignore/
        sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
        note just carries the context so the next page on anubis doesn't re-derive it."
+    maat: "wq#4844 (2026-11-04): offline on tailscale since 2026-11-04T04:17:13Z. maat is
+       the vault PRIMARY (maat.pg_role=PRIMARY, vault.current_primary=maat, cloudflared
+       origin for vault.lumennode.uk = 100.105.219.34:8222), so a maat page is a vault
+       page. Live reprobe from Lumen 05:37Z: `fleet-exec run maat -- uptime` timed out on
+       tailscale :22, and the LAN side was dark at L2 too -- 192.168.8.202 :5432/:22 gave
+       EHOSTUNREACH (ARP incomplete), so this is not a tailscaled-only fault. Not a lone
+       drop: anubis went dark 5s later (04:17:18Z, wq#4842; back on LAN :22 by 05:37Z),
+       thoth 8s later (04:17:21Z, wq#4841, still ARP-dead), and maat's own plug tapo-p4
+       .226 (also p3/p7) was ARP-dead in the same reprobe while gateway .1 and coreswitch
+       mgmt .2 answered -- a shared power/network domain, not a maat-only fault. Vault had
+       no cover: both standbys were already dark since 2026-11-03T00:20Z (sobek wq#4817,
+       bes wq#4816) and the HA monitor host wadjet is RETIRED (nodes.ignore, wq#4814), so
+       auto-promote could not run. Stale-fact trap: maat.power_restore_on_ac='NOT SET'
+       (2026-07-15), which the page quotes, is superseded by maat.bios/
+       maat.power_protection (2026-07-17: Restore-on-AC = Power On, on UPS). With plug P4
+       itself unreachable there is no remote power read or cycle path, so recovery is
+       physical (wq#4845 [PHYSICAL]). Live always-on node: a real page, never
+       nodes.ignore/sleepers."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
