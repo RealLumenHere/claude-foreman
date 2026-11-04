@@ -319,6 +319,27 @@ nodes:                  # CLASS 6
        the same bar as sia/toilet/farida/rt-ax86u: one unexplained outage with no ignore/
        sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
        note just carries the context so the next page on bes doesn't re-derive it."
+    anubis: "wq#4842 (2026-11-04): offline on tailscale since 2026-11-04T04:17:18.1Z (71
+       min). A live reprobe this ticket (`fleet-exec run anubis -- uptime`) got `ssh:
+       connect to host 100.121.17.5 port 22: Connection timed out` -- a real-time outage,
+       not a stale-read false alarm (same confirmation pattern as khnum wq#4063/bes
+       wq#4816). Dark on LAN too, not just tailscale: `curl` to 192.168.8.232:22 from
+       lumen gets 'No route to host' after a 3s connect attempt, while the gateway
+       192.168.8.1:80 answers 200 in the same probe -- the LAN itself is up, anubis is
+       not, the same dark-on-LAN class as rt-ax86u/bes rather than a tailscaled-only
+       fault like be3600's. anubis.role='Borg backup repo + Gitea' (since 2026-06-01) --
+       Gitea is the fleet's git remote (lumen-pr lands PRs through it) and Borg holds the
+       backup repo, so this is live, always-on infra, not idle hardware. `lumen_state.py
+       history anubis availability` is empty, so this is the first selfheal page recorded
+       for this node, not a repeat. No Frank power_policy/auto_sleep fact like hathor's
+       and no off-decision like apis/pbox/seshat/be3600/3dprinter/khnum/neith/wadjet --
+       nothing on record marks anubis as meant to be off or self-idling. power_plug=P9
+       (since 2026-07-16) is [UNVERIFIABLE -- no probe] (plugctl/plug-ctl are not on the
+       BUILD allowlist), so it is not fleet evidence either way per CLAUDE.md instinct 8.
+       On the facts actually on record this stays a live fleet node held to the same bar
+       as sia/toilet/farida/rt-ax86u/bes: one unexplained outage with no ignore/
+       sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
+       note just carries the context so the next page on anubis doesn't re-derive it."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
