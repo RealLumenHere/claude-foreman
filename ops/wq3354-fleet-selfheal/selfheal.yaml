@@ -319,6 +319,32 @@ nodes:                  # CLASS 6
        the same bar as sia/toilet/farida/rt-ax86u: one unexplained outage with no ignore/
        sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
        note just carries the context so the next page on bes doesn't re-derive it."
+    sekhmet: "wq#4843 (2026-11-04): offline on tailscale 41728 min (last seen
+       2026-10-06T06:00:32.1Z, ~29 days). Not a first occurrence: wq#3541 (2026-10-10)
+       already found sekhmet unreachable over tailscale (ollama :11434 /api/ps timed
+       out) while ptah -- same Station P1 SKU, same bind fix -- answered fine, and
+       wq#3496 (2026-10-10, ISSUE-LOG #1206) could not run a live node-bench on it for
+       the same reason, both before lumen_state's own status fact flipped to
+       'DOWN -- No route to host from Lumen; tailnet offline' (since 2026-10-11, conf
+       0.10). wq#4213 (2026-10-18, ISSUE-LOG #1419) then dropped sekhmet's deployment
+       from litellm_config.yaml's qwen-local-small group precisely because it had 'no
+       live precedent since 2026-10-11', keeping ptah instead -- so a dark sekhmet has
+       had no LiteLLM routing impact for over two weeks, but that is a routing
+       workaround, not a retirement: nothing in lumen_state or claude_memory records a
+       Frank off-decision (the apis/pbox/seshat/be3600/3dprinter/wadjet class) or a
+       self-idle timer (the hathor class) for this box. sekhmet.role is
+       're-workstation (per Frank 2026-10-06) + Ollama inference candidate' -- hardware
+       Frank provisioned for ongoing use, not e-waste. Re-probed live this ticket:
+       `fleet-exec run sekhmet -- uptime` returned `ssh: connect to host
+       100.75.162.62 port 22: Connection timed out' -- a real-time outage, not a
+       stale-read false alarm (same confirmation pattern as khnum wq#4063/bes wq#4816).
+       On the facts actually on record this is held to the same bar as rt-ax86u/farida/
+       sia/toilet/bes/sobek: a month-long unexplained outage with no ignore/
+       sleepers-qualifying fact behind it is still a real page, not nodes.ignore/
+       sleepers -- only Frank confirming the hardware is retired or self-idling would
+       change that. This note just carries the context (prior tickets, the litellm
+       workaround already in place, the live reprobe) so the next page on sekhmet
+       doesn't re-derive it."
     anubis: "wq#4842 (2026-11-04): offline on tailscale since 2026-11-04T04:17:18.1Z (71
        min). A live reprobe this ticket (`fleet-exec run anubis -- uptime`) got `ssh:
        connect to host 100.121.17.5 port 22: Connection timed out` -- a real-time outage,
