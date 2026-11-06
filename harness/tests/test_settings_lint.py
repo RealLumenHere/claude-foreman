@@ -1,5 +1,9 @@
 """Settings pack lint + governor-gate refusal — BUILD_PLAN.md §T2a adversarial verify
 items 3 and 4. Zero quota.
+
+Run from the foreman repo root with the harness on the path, or conftest.py cannot
+import fworker (46 collection errors):
+    cd /home/lumen/foreman && PYTHONPATH=harness:. python3 -m pytest harness/tests/test_settings_lint.py -q
 """
 import json
 import os
@@ -52,14 +56,19 @@ def test_guard_hook_referenced_and_executable():
     assert os.access(pre, os.X_OK)
 
 
-def test_docker_ps_logs_allowed_docker_star_denied():
+def test_docker_blanket_denied_no_dead_allows():
+    # wq#4682 (ebe5f012): Claude Code deny rules take precedence over allow rules,
+    # so Bash(docker ps*)/Bash(docker logs*) allows were dead under the blanket
+    # Bash(docker *) deny and were removed. Assert the deny stays and no docker
+    # allow is reintroduced (it would be shadowed, i.e. misleading). wq#4904.
     with open(SETTINGS) as f:
         data = json.load(f)
     allow = data["permissions"]["allow"]
     deny = data["permissions"]["deny"]
-    assert "Bash(docker ps*)" in allow
-    assert "Bash(docker logs*)" in allow
     assert "Bash(docker *)" in deny
+    assert not [a for a in allow if a.startswith("Bash(docker")], (
+        "docker allow rules are shadowed by the Bash(docker *) deny; do not add them"
+    )
 
 
 def test_credential_paths_denied():
