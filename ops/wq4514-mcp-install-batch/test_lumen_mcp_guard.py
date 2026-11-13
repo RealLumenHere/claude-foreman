@@ -134,10 +134,83 @@ def test_output_masking_fails_closed_when_the_masker_exits_nonzero(env):
 
 
 def test_denied_tool_cannot_be_called_even_by_name(env):
+    """wq#4947: hidden, nonexistent and empty names all get the same JSON-RPC -32602, not an isError result."""
+    from mcp.shared.exceptions import McpError
+
     async def go(c):
-        return await c.call_tool("danger_delete", {"x": "1"}, raise_on_error=False)
-    res = with_client(env, guard_cmd(env[1]), go)
-    assert res.is_error and "not permitted" in res.content[0].text
+        out = {}
+        for name in ("danger_delete", "no_such_tool", ""):
+            try:
+                r = await c.call_tool(name, {"x": "1"}, raise_on_error=False)
+                out[name] = ("result", r.is_error)
+            except McpError as exc:
+                out[name] = (exc.error.code, exc.error.message.split(":")[0])
+        out["after"] = (await c.call_tool("init_count", {})).content[0].text  # session survives
+        return out
+    out = with_client(env, guard_cmd(env[1], allow="safe_read,init_count"), go)
+    for name in ("danger_delete", "no_such_tool", ""):
+        assert out[name] == (-32602, "Unknown tool"), (name, out[name])
+    assert out["after"] == "1"
+
+
+def test_undeclared_and_mistyped_arguments_are_refused_before_the_backend(env):
+    """wq#4947 F7: docker list_volumes took 24/24 malformed inputs. Extras, wrong types, missing required."""
+    async def go(c):
+        out = {}
+        cases = {"ok": {"x": "1"}, "extra": {"x": "1", "all": True}, "only_extra": {"y": "1"},
+                 "type": {"x": 5}, "missing": {}, "nested": {"x": {"a": 1}}}
+        for label, a in cases.items():
+            r = await c.call_tool("safe_read", a, raise_on_error=False)
+            out[label] = (r.is_error, getattr(r.content[0], "text", "") if r.content else "")
+        r = await c.call_tool("leak", {"surprise": 1}, raise_on_error=False)  # no-arg tool
+        out["noarg_extra"] = (r.is_error, r.content[0].text)
+        return out
+    out = with_client(env, guard_cmd(env[1], allow="safe_read,leak"), go)
+    assert out["ok"] == (False, "read:1")
+    for label in ("extra", "only_extra", "type", "missing", "nested", "noarg_extra"):
+        assert out[label][0] is True and not out[label][1].startswith("read:"), (label, out[label])
+    assert "invalid arguments" in out["extra"][1] and "'all'" in out["extra"][1]
+    log = os.path.join(env[1], ".local/state/lumen-mcp-guard/t.jsonl")
+    rows = [json.loads(l) for l in open(log)]
+    denied = [r for r in rows if r["decision"] == "DENY"]
+    assert any(r["reason"] == "schema: additionalProperties at <root>" for r in denied)
+
+
+def test_check_schema_rules():
+    sys.path.insert(0, HERE)
+    import lumen_mcp_guard as g
+    s = {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
+    assert g.check_schema(s, {"x": "a"}) is None
+    assert g.check_schema(s, {"x": "a", "y": 1})[1] == "schema: additionalProperties at <root>"
+    assert g.check_schema(dict(s, additionalProperties=True), {"x": "a", "y": 1}) is None  # schema opts in
+    assert g.check_schema(dict(s, additionalProperties=False), {"x": "a", "y": 1}) is not None
+    assert g.check_schema({"type": 7}, {})[1] == "schema: backend schema invalid"  # fail closed
+    assert g.check_schema(None, {}) is None and g.check_schema(None, {"y": 1}) is not None
+    detail, reason = g.check_schema({"type": "object", "properties": {"n": {"type": "integer"}}}, {"n": "TOPSECRET"})
+    assert "TOPSECRET" in detail and "TOPSECRET" not in reason and reason == "schema: type at n"  # audit is value-free
+
+
+def raw_initialize(env_tmp, params):
+    """Send one raw initialize line to the guard and return the parsed reply."""
+    e, tmp = env_tmp
+    p = subprocess.Popen(guard_cmd(tmp), env=e, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True)
+    try:
+        p.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": params}) + "\n")
+        p.stdin.flush()
+        return json.loads(p.stdout.readline())
+    finally:
+        p.kill()
+        p.wait(timeout=30)
+
+
+def test_initialize_with_empty_protocol_version_or_client_name_is_a_jsonrpc_error(env):
+    good = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t", "version": "1"}}
+    assert raw_initialize(env, good)["result"]["protocolVersion"] == "2025-06-18"
+    for bad in (dict(good, protocolVersion=""), dict(good, protocolVersion="  "),
+                dict(good, clientInfo={"name": "", "version": "1"})):
+        reply = raw_initialize(env, bad)
+        assert "result" not in reply and reply["error"]["code"] == -32602, (bad, reply)
 
 
 def test_allowed_tool_passes_through(env):
@@ -203,7 +276,8 @@ def test_resources_and_prompts_are_hidden(env):
 def test_audit_log_has_tool_names_and_arg_keys_but_never_values(env):
     async def go(c):
         await c.call_tool("safe_read", {"x": "TOPSECRET-VALUE-123"})
-        await c.call_tool("danger_delete", {"x": "TOPSECRET-VALUE-123"}, raise_on_error=False)
+        with pytest.raises(Exception, match="Unknown tool"):
+            await c.call_tool("danger_delete", {"x": "TOPSECRET-VALUE-123"})
     with_client(env, guard_cmd(env[1]), go)
     log = os.path.join(env[1], ".local/state/lumen-mcp-guard/t.jsonl")
     body = open(log).read()

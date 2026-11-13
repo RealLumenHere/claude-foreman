@@ -20,6 +20,14 @@ Code and the real server:
   * every decision is appended to ~/.local/state/lumen-mcp-guard/<name>.jsonl. Tool names and
     argument KEYS only, never values: values can carry typed secrets.
 
+Protocol hardening (wq#4947, audit F7), following the MCP 2025-11-25 tools spec split:
+  * a tools/call naming a tool that is not on the allowlist (hidden, nonexistent or '') is a
+    JSON-RPC error -32602 "Unknown tool", the same answer for all three;
+  * arguments are validated against the backend's inputSchema with undeclared keys refused
+    (additionalProperties defaults to false unless the schema opts in). That is an input
+    validation error, so it comes back as an isError result the model can correct;
+  * initialize with an empty protocolVersion or clientInfo.name is a JSON-RPC error -32602.
+
 Usage:
   lumen_mcp_guard.py --name N --allow a,b,c [--http-url-arg tool:arg] [--arg-allow tool:arg=v1|v2]
                      [--mask-output CMD] [--egress-proxy]
@@ -100,7 +108,27 @@ def mask_result(cmd, result):
     return result
 
 
-def make_policy(allow, url_args, arg_allow, audit, mask_cmd=None):
+def check_schema(schema, arguments):
+    """Validate arguments against a backend inputSchema, refusing keys the schema does not declare.
+
+    Returns None when valid, else (detail for the caller, value-free reason for the audit log).
+    """
+    import jsonschema
+    strict = dict(schema or {})
+    strict.setdefault("additionalProperties", False)
+    try:
+        cls = jsonschema.validators.validator_for(strict)
+        cls.check_schema(strict)
+        err = jsonschema.exceptions.best_match(cls(strict).iter_errors(arguments))
+    except jsonschema.exceptions.SchemaError:
+        return "backend inputSchema is not a valid JSON Schema", "schema: backend schema invalid"
+    if err is None:
+        return None
+    where = "/".join(str(p) for p in err.absolute_path) or "<root>"
+    return f"{where}: {err.message[:200]}", f"schema: {err.validator} at {where}"
+
+
+def make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd=None):
     from fastmcp.exceptions import ToolError
     from fastmcp.server.middleware import Middleware
 
@@ -112,9 +140,18 @@ def make_policy(allow, url_args, arg_allow, audit, mask_cmd=None):
         async def on_call_tool(self, context, call_next):
             name = context.message.name
             arguments = context.message.arguments or {}
-            if name not in allow:
+            if name not in allow:  # gate_unknown_tools answers first; this is the backstop
                 audit(name, "DENY", "not on allowlist", arguments)
                 raise ToolError(f"tool {name!r} is not permitted by the lumen MCP guard")
+            try:
+                schema = await get_schema(name)
+            except Exception as exc:  # backend cannot describe the tool: do not forward blind
+                audit(name, "DENY", f"schema unavailable: {type(exc).__name__}", arguments)
+                raise ToolError(f"{name}: input schema unavailable, call refused") from None
+            bad = check_schema(schema, arguments)
+            if bad:
+                audit(name, "DENY", bad[1], arguments)
+                raise ToolError(f"{name}: invalid arguments: {bad[0]}")
             for arg in sorted(url_args.get(name, ())):
                 if arg in arguments and arguments[arg] is not None:
                     try:
@@ -153,6 +190,43 @@ def make_policy(allow, url_args, arg_allow, audit, mask_cmd=None):
             raise ToolError("prompts are not exposed by the lumen MCP guard")
 
     return Policy()
+
+
+def gate_unknown_tools(lowlevel, allow, audit):
+    """Answer tools/call for a tool outside the allowlist with JSON-RPC -32602, not an isError result.
+
+    Anything raised under mcp's call_tool handler becomes isError, so the check wraps the
+    registered request handler; McpError from there is sent as a JSON-RPC error.
+    """
+    import mcp.types as mt
+    from mcp.shared.exceptions import McpError
+    inner = lowlevel.request_handlers[mt.CallToolRequest]
+
+    async def handler(req):
+        name = req.params.name
+        if name not in allow:
+            audit(name, "DENY", "not on allowlist", req.params.arguments or {})
+            raise McpError(mt.ErrorData(code=mt.INVALID_PARAMS, message=f"Unknown tool: {name[:80]!r}"))
+        return await inner(req)
+    lowlevel.request_handlers[mt.CallToolRequest] = handler
+
+
+def harden_initialize():
+    """Refuse initialize with an empty protocolVersion or clientInfo.name (mcp accepts both)."""
+    import mcp.types as mt
+    from mcp.server.session import ServerSession
+    orig = ServerSession._received_request
+
+    async def received(self, responder):
+        req = responder.request.root
+        if isinstance(req, mt.InitializeRequest) and not (
+                req.params.protocolVersion.strip() and req.params.clientInfo.name.strip()):
+            with responder:
+                await responder.respond(mt.ErrorData(
+                    code=mt.INVALID_PARAMS, message="initialize needs a non-empty protocolVersion and clientInfo.name"))
+            return
+        return await orig(self, responder)
+    ServerSession._received_request = received
 
 
 def make_audit(name):
@@ -242,9 +316,15 @@ def main(argv):
         # the first test run (test_backend_sees_exactly_one_initialize pins it).
         async with backend:
             server = FastMCP.as_proxy(backend, name=args.name)
-            server.add_middleware(make_policy(allow, url_args, arg_allow, make_audit(args.name), mask_cmd))
+            audit = make_audit(args.name)
+
+            async def get_schema(name):
+                return (await server.get_tool(name)).parameters
+            server.add_middleware(make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd))
+            gate_unknown_tools(server._mcp_server, allow, audit)
             await server.run_async(transport="stdio", show_banner=False)
 
+    harden_initialize()
     asyncio.run(serve())
     return 0
 
