@@ -361,8 +361,24 @@ def split_command(argv):
     return argv[:i], argv[i + 1:]
 
 
+# Variables that make an interpreter or the dynamic loader run code the backend did not ship
+# (wq#4944, audit F4). The guard itself runs under python -I, but the backend inherits its env:
+# desktop-commander's PYTHONPATH=/home/lumen/opt/mcp-proxy/lib made mcp-server-docker import a
+# foreign pydantic and die. Dropped before the backend starts; --env can still set one on purpose.
+SCRUB_PREFIXES = ("PYTHON", "LD_", "BASH_FUNC_")
+SCRUB_NAMES = {"NODE_OPTIONS", "NODE_PATH", "BASH_ENV", "ENV", "GCONV_PATH", "PERL5LIB", "PERL5OPT",
+               "PERLLIB", "RUBYOPT", "RUBYLIB", "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS"}
+
+
+def scrubbed(key):
+    return key in SCRUB_NAMES or key.startswith(SCRUB_PREFIXES)
+
+
 def build_env(pairs):
-    env = dict(os.environ)
+    env = {k: v for k, v in os.environ.items() if not scrubbed(k)}
+    dropped = sorted(set(os.environ) - set(env))
+    if dropped:  # names only: values can be secrets
+        print(f"lumen_mcp_guard: scrubbed from backend env: {dropped}", file=sys.stderr)
     for pair in pairs:
         key, sep, val = pair.partition("=")
         if not sep or not key:

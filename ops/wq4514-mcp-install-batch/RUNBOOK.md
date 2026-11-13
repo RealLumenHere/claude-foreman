@@ -35,7 +35,11 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
   `ops/wq4945-mcp-name-collisions/mcp_pin_check.py collisions` (wq#4945);
 - resources and prompts are never exposed; the audit log `~/.local/state/lumen-mcp-guard/<name>.jsonl`
   records tool names and argument KEYS only, never values, plus a `START` row with the backend's own
-  serverInfo (the agent only sees the guard's) and a `LIST` row when the backend's tool names change.
+  serverInfo (the agent only sees the guard's) and a `LIST` row when the backend's tool names change;
+- the backend gets the caller's env minus code-load variables (wq#4944, audit F4): `PYTHON*`, `LD_*`,
+  `BASH_FUNC_*`, `NODE_OPTIONS`, `NODE_PATH`, `BASH_ENV`, `ENV`, `GCONV_PATH`, Perl/Ruby/Java option vars.
+  Dropped names go to stderr. Desktop-commander's `PYTHONPATH=/home/lumen/opt/mcp-proxy/lib` used to
+  break mcp-server-docker this way. A launcher that needs one sets it with `--env K=V`.
 One backend session is held for the guard's lifetime: Go servers (gitea-mcp) refuse a second `initialize`.
 
 ## One-time operator steps (already done 2026-10-23; here so they are reproducible)

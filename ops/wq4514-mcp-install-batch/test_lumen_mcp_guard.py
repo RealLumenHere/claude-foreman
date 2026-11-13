@@ -337,6 +337,31 @@ def test_empty_allowlist_refuses_to_start(env):
     assert p.returncode != 0 and "refusing to start" in (p.stderr + p.stdout)
 
 
+def test_build_env_scrubs_code_load_variables(monkeypatch):
+    sys.path.insert(0, HERE)
+    import lumen_mcp_guard as g
+    for k in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "LD_PRELOAD", "LD_LIBRARY_PATH", "NODE_OPTIONS",
+              "NODE_PATH", "BASH_ENV", "BASH_FUNC_cat%%", "JAVA_TOOL_OPTIONS"):
+        monkeypatch.setenv(k, "/poison")
+    monkeypatch.setenv("KEEP_ME", "1")
+    e = g.build_env(["PYTHONUNBUFFERED=1"])
+    assert e["KEEP_ME"] == "1" and e["PATH"] == os.environ["PATH"]
+    assert not {k for k in e if g.scrubbed(k)} - {"PYTHONUNBUFFERED"}  # only what --env set on purpose
+    assert e["PYTHONUNBUFFERED"] == "1"
+
+
+def test_inherited_pythonpath_does_not_reach_the_backend(env, tmp_path):
+    # wq#4944 F4: Commander's PYTHONPATH reached mcp-server-docker and broke its imports. A sitecustomize
+    # on PYTHONPATH runs at interpreter start, so the backend dies unless the guard drops PYTHONPATH.
+    poison = tmp_path / "poison"
+    poison.mkdir()
+    (poison / "sitecustomize.py").write_text("raise SystemExit('poisoned by inherited PYTHONPATH')\n")
+    e = dict(env[0], PYTHONPATH=str(poison))
+    cmd = [sys.executable, "-I", *guard_cmd(env[1])[1:]]  # -I as every launcher runs it
+    res = with_client((e, env[1]), cmd, lambda c: c.call_tool("safe_read", {"x": "ok"}))
+    assert res.content[0].text == "read:ok"
+
+
 def test_url_arg_on_unlisted_tool_is_a_config_error(env):
     p = subprocess.run(guard_cmd(env[1], ["--http-url-arg", "danger_delete:x"]), env=env[0],
                        capture_output=True, text=True, timeout=30)
