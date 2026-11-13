@@ -14,6 +14,8 @@
 #   * A third-party server whose tools can mutate or reach the network runs behind
 #     lumen_mcp_guard.py: fail-closed tool allowlist, argument-value allowlists, http(s)-only
 #     URL arguments, resources/prompts hidden, and for browsers a forced public-only egress proxy.
+#   * Every guarded launcher passes --mask-output: file contents, page snapshots and SQL rows can
+#     carry secrets as easily as container logs (wq#4943).
 #   * Launchers are GENERATED here and --verify compares them byte for byte.
 #   * Operator-side steps that need another node (minting the Gitea token on Anubis, the
 #     read-only DB role) are in RUNBOOK.md, not here: this script only touches Lumen.
@@ -125,6 +127,7 @@ export GITEA_ACCESS_TOKEN_FILE=$GITEA_TOKEN
 export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name gitea \\
   --allow $GITEA_ALLOW \\
+  --mask-output $MASKER \\
 $(for a in "${GITEA_ARG_ALLOW[@]}"; do printf "  --arg-allow '%s' \\\\\n" "$a"; done; printf '  --') $ROOT/gitea-mcp/$GITEA_VER/gitea-mcp -t stdio
 EOF
 }
@@ -142,6 +145,7 @@ export READONLY=true MAX_ROWS=500 TRANSPORT=stdio
 export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name fleet-memory \\
   --allow $DBHUB_ALLOW \\
+  --mask-output $MASKER \\
   -- $NODE $ROOT/dbhub/$DBHUB_VER/node_modules/@bytebase/dbhub/dist/index.js
 EOF
 }
@@ -158,6 +162,7 @@ export TRANSPORT=stdio
 export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name fleet-state \\
   --allow $FLEET_STATE_ALLOW \\
+  --mask-output $MASKER \\
   -- $NODE $ROOT/dbhub/$DBHUB_VER/node_modules/@bytebase/dbhub/dist/index.js --config=$ROOT/dbhub/$DBHUB_VER/fleet-state.toml
 EOF
 }
@@ -207,6 +212,7 @@ export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name playwright --egress-proxy \\
   --allow $PW_ALLOW \\
   --http-url-arg browser_navigate:url --http-url-arg browser_tabs:url \\
+  --mask-output $MASKER \\
   -- $NODE $ROOT/playwright-mcp/$PW_VER/node_modules/@playwright/mcp/cli.js \\
   --headless --isolated --browser chromium --executable-path $PW_CHROME \\
   --proxy-server '{EGRESS_PROXY}' --proxy-bypass '<-loopback>' --block-service-workers \\
@@ -254,6 +260,7 @@ verify_common() {
 
 verify_gitea() {
   local d=$ROOT/gitea-mcp/$GITEA_VER
+  [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   v_binary "$d/gitea-mcp" "$GITEA_BIN_SHA"
   vgen "$d/launch.sh" emit_launcher_gitea
   v_secret_file "$GITEA_TOKEN"
@@ -263,6 +270,7 @@ verify_gitea() {
 
 verify_postgres() {
   local d=$ROOT/dbhub/$DBHUB_VER
+  [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   vfile "$SRC/dbhub-package.json" "$d/package.json"
   vfile "$SRC/dbhub-package-lock.json" "$d/package-lock.json"
   [ "$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$d/node_modules/@bytebase/dbhub/package.json" 2>/dev/null | head -1)" = "$DBHUB_VER" ] \
@@ -275,6 +283,7 @@ verify_postgres() {
 
 verify_fleet_state() {
   local d=$ROOT/dbhub/$DBHUB_VER
+  [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   [ "$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$d/node_modules/@bytebase/dbhub/package.json" 2>/dev/null | head -1)" = "$DBHUB_VER" ] \
     || _vmiss "dbhub $DBHUB_VER not installed in $d (shared with fleet-memory)"
   vfile "$SRC/fleet-state.toml" "$d/fleet-state.toml"
@@ -306,6 +315,7 @@ verify_grafana() {
 
 verify_playwright() {
   local d=$ROOT/playwright-mcp/$PW_VER
+  [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   vfile "$SRC/playwright-package.json" "$d/package.json"
   vfile "$SRC/playwright-package-lock.json" "$d/package-lock.json"
   vfile "$SRC/playwright-browser-config.json" "$d/browser-config.json"
