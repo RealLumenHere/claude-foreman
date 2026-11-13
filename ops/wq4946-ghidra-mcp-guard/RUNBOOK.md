@@ -50,7 +50,8 @@ Definition pins (`--pins`, wq#4941): `ghidra-pins.json` holds the sha256 of each
 cut from the 2026-11-12 security-gate baseline (`mcp-tool-pins-2026-11.json`, `ghidra-lumen@unguarded`).
 A tool whose description or schema changes is hidden and refused, and the guard logs a `DRIFT` row.
 After a bridge upgrade, regenerate the pins (security-gate `snap.py`) only once the new definitions
-have been read.
+have been read. Then re-run the cross-server name check (wq#4945,
+`ops/wq4945-mcp-name-collisions/README.md`): a new tool name that another server also exposes fails it.
 
 Output passes through `/home/lumen/bin/mask-secrets`. If the masker fails, the result is withheld.
 A hardcoded credential in a target binary will show up as `MASKED`. To see the real bytes, use

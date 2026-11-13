@@ -1,0 +1,14 @@
+{
+ "note": "Reviewed cross-server tool-name collisions (wq#4945, audit F5). Each entry holds only for exactly this server set. Claude Code calls tools as mcp__<server>__<tool>, so none of these can misroute there; a flat-namespace client would need them renamed or prefixed.",
+ "accepted": [
+  {"name": "execute_sql", "servers": ["fleet-memory", "fleet-state"], "reason": "two dbhub 1.5.0 instances, one per database; same tool, different DB"},
+  {"name": "search_objects", "servers": ["fleet-memory", "fleet-state"], "reason": "two dbhub 1.5.0 instances, one per database; same tool, different DB"},
+  {"name": "batch_decompile", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"},
+  {"name": "list_bookmarks", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"},
+  {"name": "list_segments", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"},
+  {"name": "list_strings", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"},
+  {"name": "search_strings", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"},
+  {"name": "set_bookmark", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"},
+  {"name": "set_comment", "servers": ["ghidra-lumen", "rea"], "reason": "two RE backends with overlapping vocabulary; ghidra-lumen guarded and pinned (wq#4946), rea behind rea-guard"}
+ ]
+}

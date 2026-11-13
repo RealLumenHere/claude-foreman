@@ -30,7 +30,9 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
   schemas, annotations) no longer hashes to its reviewed pin, or has no pin, and writes a `DRIFT` audit row.
   The file is the security-gate snapshot layout (`servers["<name>@guarded"].tools`, see
   `/home/lumen/docs/security/mcp-tool-pins-2026-11.json`); `--pins-surface` picks another entry. A bad
-  file or missing entry refuses to start. Without `--pins`, a changed definition passes but gets a `CHANGED` row;
+  file or missing entry refuses to start. Without `--pins`, a changed definition passes but gets a `CHANGED` row.
+  A guard sees one server only; tool names shared across servers are checked over the pin files by
+  `ops/wq4945-mcp-name-collisions/mcp_pin_check.py collisions` (wq#4945);
 - resources and prompts are never exposed; the audit log `~/.local/state/lumen-mcp-guard/<name>.jsonl`
   records tool names and argument KEYS only, never values, plus a `START` row with the backend's own
   serverInfo (the agent only sees the guard's) and a `LIST` row when the backend's tool names change.
