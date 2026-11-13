@@ -23,6 +23,7 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
 `lumen_mcp_guard.py` is therefore fail closed:
 - only tools on `--allow` are listed or callable (new upstream tools stay hidden until reviewed);
 - `--arg-allow TOOL:ARG=v1|v2` closes multiplexed tools to reviewed methods (no PR merge, no review dismiss);
+- `--path-arg TOOL:ARG=/root` pins a host-path argument under a root after resolving symlinks. Used by ghidra-lumen, `ops/wq4946-ghidra-mcp-guard`;
 - `--http-url-arg` pins URL arguments to http(s); `--egress-proxy` forces the browser through the public-only proxy;
 - `--mask-output` runs results through `mask-secrets`, withholding the result if masking fails;
 - `--pins FILE` (wq#4941) hides and refuses any allowlisted tool whose definition (name, title, description,
