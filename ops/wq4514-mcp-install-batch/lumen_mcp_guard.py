@@ -13,6 +13,9 @@ Code and the real server:
   * --arg-allow TOOL:ARG=v1|v2 pins an argument to a closed set of values. An absent
     argument or any other value is refused. This is how a multiplexed tool such as
     pull_request_write(method=...) is cut down to the methods someone reviewed;
+  * --path-arg TOOL:ARG=ROOT pins a host-path argument under ROOT: it must be absolute and its
+    realpath (symlinks resolved) must be ROOT or below it. Absent or empty is refused (wq#4946,
+    ghidra-lumen load_program/import_file/open_project);
   * --mask-output CMD pipes every text result through CMD (the fleet's mask-secrets) before it
     reaches the agent. Fail closed: if CMD errors, the result is withheld, not passed raw;
   * --egress-proxy starts lumen_egress_proxy (public hosts only, resolved and IP-pinned per
@@ -30,7 +33,7 @@ Protocol hardening (wq#4947, audit F7), following the MCP 2025-11-25 tools spec 
 
 Usage:
   lumen_mcp_guard.py --name N --allow a,b,c [--http-url-arg tool:arg] [--arg-allow tool:arg=v1|v2]
-                     [--mask-output CMD] [--egress-proxy]
+                     [--path-arg tool:arg=/root] [--mask-output CMD] [--egress-proxy]
                      [--env K=V] -- BACKEND_CMD ARGS...
   lumen_mcp_guard.py --list-backend --allow a,b,c -- BACKEND_CMD ARGS...
       prints the backend's tools split into exposed/hidden/missing; exit 1 if an allowlisted
@@ -85,6 +88,25 @@ def parse_arg_allow(specs):
     return out
 
 
+def parse_path_args(specs):
+    out = {}
+    for spec in specs:
+        left, eq, root = spec.partition("=")
+        tool, colon, arg = left.partition(":")
+        if not (eq and colon and tool and arg and os.path.isabs(root)):
+            raise SystemExit(f"--path-arg wants TOOL:ARG=/absolute/root, got {spec!r}")
+        out.setdefault(tool, {})[arg] = os.path.realpath(root)
+    return out
+
+
+def check_path(value, root):
+    if not isinstance(value, str) or not os.path.isabs(value):
+        raise PolicyError(f"must be an absolute path under {root}")
+    real = os.path.realpath(value)
+    if real != root and not real.startswith(root + os.sep):
+        raise PolicyError(f"path is outside {root}")
+
+
 def mask_text(cmd, text):
     try:
         p = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=20)
@@ -128,7 +150,8 @@ def check_schema(schema, arguments):
     return f"{where}: {err.message[:200]}", f"schema: {err.validator} at {where}"
 
 
-def make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd=None):
+def make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd=None, path_args=None):
+    path_args = path_args or {}
     from fastmcp.exceptions import ToolError
     from fastmcp.server.middleware import Middleware
 
@@ -164,6 +187,12 @@ def make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd=None):
                 if value is None or str(value) not in allowed:
                     audit(name, "DENY", f"{arg}: value not in reviewed set", arguments)
                     raise ToolError(f"{name}: {arg}={str(value)[:40]!r} is not permitted; allowed: {sorted(allowed)}")
+            for arg, root in sorted(path_args.get(name, {}).items()):
+                try:
+                    check_path(arguments.get(arg), root)
+                except PolicyError as exc:
+                    audit(name, "DENY", f"{arg}: {exc}", arguments)
+                    raise ToolError(f"{name}: argument {arg!r}: {exc}") from None
             audit(name, "ALLOW", "", arguments)
             result = await call_next(context)
             if mask_cmd:
@@ -278,6 +307,7 @@ def main(argv):
     ap.add_argument("--allow", required=True)
     ap.add_argument("--http-url-arg", action="append", default=[])
     ap.add_argument("--arg-allow", action="append", default=[])
+    ap.add_argument("--path-arg", action="append", default=[])
     ap.add_argument("--mask-output", default=None)
     ap.add_argument("--egress-proxy", action="store_true")
     ap.add_argument("--env", action="append", default=[])
@@ -288,9 +318,10 @@ def main(argv):
         raise SystemExit("refusing to start: empty allowlist or backend command")
     url_args = parse_url_args(args.http_url_arg)
     arg_allow = parse_arg_allow(args.arg_allow)
-    stray = (set(url_args) | set(arg_allow)) - allow
+    path_args = parse_path_args(args.path_arg)
+    stray = (set(url_args) | set(arg_allow) | set(path_args)) - allow
     if stray:
-        raise SystemExit(f"--http-url-arg/--arg-allow name tools not on the allowlist: {sorted(stray)}")
+        raise SystemExit(f"--http-url-arg/--arg-allow/--path-arg name tools not on the allowlist: {sorted(stray)}")
     if args.egress_proxy:
         import lumen_egress_proxy
         proxy = lumen_egress_proxy.start()
@@ -320,7 +351,7 @@ def main(argv):
 
             async def get_schema(name):
                 return (await server.get_tool(name)).parameters
-            server.add_middleware(make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd))
+            server.add_middleware(make_policy(allow, url_args, arg_allow, audit, get_schema, mask_cmd, path_args))
             gate_unknown_tools(server._mcp_server, allow, audit)
             await server.run_async(transport="stdio", show_banner=False)
 
