@@ -51,6 +51,7 @@ exec $GPY -I $GUARD --name $NAME \\
   --allow $GHIDRA_ALLOW \\
 $(for a in "${PATH_ARGS[@]}"; do printf '  --path-arg %s=%s \\\n' "$a" "$RE_ROOT"; done)
   --mask-output $MASKER \\
+  --max-result-bytes 524288 \\
   --pins $PINS \\
   --env GHIDRA_MCP_BRIDGE_ARGS=--no-lazy \\
   -- $BRIDGE

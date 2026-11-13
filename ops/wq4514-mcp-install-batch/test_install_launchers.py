@@ -46,6 +46,16 @@ class LauncherMasking(unittest.TestCase):
                 self.assertIn("--mask-output", argv, f"{name}: guard runs without --mask-output")
                 self.assertEqual(argv[argv.index("--mask-output") + 1], MASKER)
 
+    def test_every_launcher_caps_results_and_third_party_ones_are_marked_untrusted(self):
+        """wq#4942 (audit F2): G11 size cap on all, G10 untrusted wrapper on servers returning third-party text."""
+        untrusted = {"gitea", "docker", "grafana", "playwright"}
+        for name in LAUNCHERS:
+            with self.subTest(launcher=name):
+                argv = guard_argv(emit(name))
+                self.assertIn("--max-result-bytes", argv, f"{name}: guard runs without a result size cap")
+                self.assertEqual(argv[argv.index("--max-result-bytes") + 1], "524288")
+                self.assertEqual("--untrusted-output" in argv, name in untrusted, name)
+
     def test_launchers_parse(self):
         for name in LAUNCHERS:
             with self.subTest(launcher=name):

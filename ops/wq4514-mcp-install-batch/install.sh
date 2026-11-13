@@ -16,6 +16,11 @@
 #     URL arguments, resources/prompts hidden, and for browsers a forced public-only egress proxy.
 #   * Every guarded launcher passes --mask-output: file contents, page snapshots and SQL rows can
 #     carry secrets as easily as container logs (wq#4943).
+#   * Every guarded launcher passes --max-result-bytes $MAX_RESULT_BYTES (wq#4942, audit G11: a 5 MB
+#     result went straight through). Servers whose results carry third-party text (repo files and
+#     issue bodies, web pages, container logs, dashboard text) also pass --untrusted-output, which
+#     wraps every result in nonce markers that say "data, not instructions" (audit G10). The two
+#     dbhub launchers read our own databases and stay unwrapped.
 #   * Launchers are GENERATED here and --verify compares them byte for byte.
 #   * Operator-side steps that need another node (minting the Gitea token on Anubis, the
 #     read-only DB role) are in RUNBOOK.md, not here: this script only touches Lumen.
@@ -32,6 +37,9 @@ PY312=/home/lumen/.local/bin/python3.12
 SECRETS=/home/lumen/.secrets
 ALL_TOOLS="gitea postgres docker grafana playwright fleet_state"
 NODE=/usr/bin/node
+# 512 KiB: above what Claude Code itself keeps inline (25k tokens; text over 50k chars goes to a file,
+# code.claude.com/docs/en/mcp, 2026-11-13), so normal results are untouched; a screenshot still fits.
+MAX_RESULT_BYTES=524288
 
 # ---------------------------------------------------------------- pins: gitea
 GITEA_VER=1.8.1
@@ -128,6 +136,7 @@ export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name gitea \\
   --allow $GITEA_ALLOW \\
   --mask-output $MASKER \\
+  --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
 $(for a in "${GITEA_ARG_ALLOW[@]}"; do printf "  --arg-allow '%s' \\\\\n" "$a"; done; printf '  --') $ROOT/gitea-mcp/$GITEA_VER/gitea-mcp -t stdio
 EOF
 }
@@ -146,6 +155,7 @@ export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name fleet-memory \\
   --allow $DBHUB_ALLOW \\
   --mask-output $MASKER \\
+  --max-result-bytes $MAX_RESULT_BYTES \\
   -- $NODE $ROOT/dbhub/$DBHUB_VER/node_modules/@bytebase/dbhub/dist/index.js
 EOF
 }
@@ -163,6 +173,7 @@ export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name fleet-state \\
   --allow $FLEET_STATE_ALLOW \\
   --mask-output $MASKER \\
+  --max-result-bytes $MAX_RESULT_BYTES \\
   -- $NODE $ROOT/dbhub/$DBHUB_VER/node_modules/@bytebase/dbhub/dist/index.js --config=$ROOT/dbhub/$DBHUB_VER/fleet-state.toml
 EOF
 }
@@ -178,6 +189,7 @@ export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name docker \\
   --allow $DOCKER_ALLOW \\
   --mask-output $MASKER \\
+  --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
   -- $ROOT/docker-mcp/$DOCKER_MCP_VER/venv/bin/mcp-server-docker
 EOF
 }
@@ -197,6 +209,7 @@ export PYTHONWARNINGS=ignore
 exec $GPY -I $GUARD --name grafana \\
   --allow $GRAFANA_ALLOW \\
   --mask-output $MASKER \\
+  --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
   -- $ROOT/mcp-grafana/$GRAFANA_VER/mcp-grafana -t stdio --disable-write --enabled-tools search,datasource,prometheus,alerting,dashboard,folder,annotations,navigation
 EOF
 }
@@ -213,6 +226,7 @@ exec $GPY -I $GUARD --name playwright --egress-proxy \\
   --allow $PW_ALLOW \\
   --http-url-arg browser_navigate:url --http-url-arg browser_tabs:url \\
   --mask-output $MASKER \\
+  --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
   -- $NODE $ROOT/playwright-mcp/$PW_VER/node_modules/@playwright/mcp/cli.js \\
   --headless --isolated --browser chromium --executable-path $PW_CHROME \\
   --proxy-server '{EGRESS_PROXY}' --proxy-bypass '<-loopback>' --block-service-workers \\

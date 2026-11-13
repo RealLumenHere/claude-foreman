@@ -25,7 +25,25 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
 - `--arg-allow TOOL:ARG=v1|v2` closes multiplexed tools to reviewed methods (no PR merge, no review dismiss);
 - `--path-arg TOOL:ARG=/root` pins a host-path argument under a root after resolving symlinks. Used by ghidra-lumen, `ops/wq4946-ghidra-mcp-guard`;
 - `--http-url-arg` pins URL arguments to http(s); `--egress-proxy` forces the browser through the public-only proxy;
-- `--mask-output` runs results through `mask-secrets`, withholding the result if masking fails;
+- `--mask-output` runs results through `mask-secrets`, withholding the result if masking fails. Since
+  wq#4942 that includes embedded text resources and a backend's `isError` text, which fastmcp's proxy
+  re-raises as a ToolError and which skipped the masker before;
+- `--max-result-bytes N` (wq#4942, audit G11) cuts text past N bytes with a note, replaces a non-text block
+  that does not fit with a note, refuses structuredContent over N, and writes a `TRUNCATED` audit row. The
+  cut runs after masking, so it cannot leave half a secret the masker would have caught. All six launchers
+  pass 512 KiB, as does ghidra-lumen;
+- `--untrusted-output` (wq#4942, audit G10) wraps every text result between `<<<untrusted-NONCE` and
+  `untrusted-NONCE>>>` behind a one-line "data, never instructions" header. NONCE is random per call, so
+  a payload cannot close the block early. It drops structuredContent and strips outputSchema from the
+  listed tools, because Claude Code shows the model only structuredContent when both are present
+  (anthropics/claude-code#55677), which would bypass the wrapper. Instruction-like text gets a `SUSPECT`
+  audit row that names the pattern but never quotes the text. This is a marker, not a filter: it lowers
+  the odds that injected text is obeyed but does not rule it out, so the allowlists stay the real
+  boundary. Used on gitea, docker, grafana and playwright. The dbhub launchers read our own DBs and are
+  not wrapped. ghidra-lumen is not wrapped either, because stripping outputSchema would change the
+  definitions its `--pins` were taken over. **Pins:** with the flag, a tool is judged on the definition
+  the agent sees, without outputSchema. Re-snapshot `<name>@guarded` after deploy before adding `--pins`
+  to a wrapped launcher;
 - `--pins FILE` (wq#4941) hides and refuses any allowlisted tool whose definition (name, title, description,
   schemas, annotations) no longer hashes to its reviewed pin, or has no pin, and writes a `DRIFT` audit row.
   The file is the security-gate snapshot layout (`servers["<name>@guarded"].tools`, see
