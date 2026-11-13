@@ -47,6 +47,9 @@ BACKEND = textwrap.dedent('''
     def pr_write(method: str) -> str:
         return "pr:" + method
     @m.tool
+    def load(file: str = "") -> str:
+        return "loaded:" + file
+    @m.tool
     def argv() -> str:
         return " ".join(sys.argv[1:])
     @m.resource("res://secret")
@@ -186,6 +189,46 @@ def test_arg_allow_malformed_spec_is_a_config_error(env):
         assert p.returncode != 0 and "--arg-allow wants" in p.stderr, spec
 
 
+def test_path_arg_pins_a_host_path_under_its_root(env):
+    """wq#4946: ghidra-lumen load_program/import_file read any host file the server user can."""
+    tmp = env[1]
+    root = os.path.join(tmp, "re")
+    os.makedirs(os.path.join(root, "bins"))
+    os.makedirs(os.path.join(tmp, "re-evil"))
+    open(os.path.join(root, "bins", "a.bin"), "wb").close()
+    os.symlink("/etc/passwd", os.path.join(root, "bins", "escape"))
+    cmd = guard_cmd(tmp, ["--path-arg", f"load:file={root}"], allow="load")
+    probes = {
+        "inside": os.path.join(root, "bins", "a.bin"),
+        "root": root,
+        "outside": "/etc/passwd",
+        "dotdot": os.path.join(root, "..", "re-evil", "x"),
+        "sibling_prefix": os.path.join(tmp, "re-evil", "x"),
+        "symlink_escape": os.path.join(root, "bins", "escape"),
+        "relative": "bins/a.bin",
+        "empty": "",
+    }
+
+    async def go(c):
+        out = {k: (await c.call_tool("load", {"file": v}, raise_on_error=False)).is_error for k, v in probes.items()}
+        out["absent"] = (await c.call_tool("load", {}, raise_on_error=False)).is_error
+        return out
+    out = with_client(env, cmd, go)
+    assert out["inside"] is False and out["root"] is False
+    for bad in ("outside", "dotdot", "sibling_prefix", "symlink_escape", "relative", "empty", "absent"):
+        assert out[bad] is True, bad
+
+
+def test_path_arg_malformed_spec_is_a_config_error(env):
+    for spec in ("load", "load:file", "load:file=", "load:file=relative/root", ":file=/x"):
+        p = subprocess.run(guard_cmd(env[1], ["--path-arg", spec], allow="load"), env=env[0],
+                           capture_output=True, text=True, timeout=30)
+        assert p.returncode != 0 and "--path-arg wants" in p.stderr, spec
+    p = subprocess.run(guard_cmd(env[1], ["--path-arg", "load:file=/x"], allow="safe_read"), env=env[0],
+                       capture_output=True, text=True, timeout=30)
+    assert p.returncode != 0 and "not on the allowlist" in p.stderr
+
+
 def test_resources_and_prompts_are_hidden(env):
     async def go(c):
         res = await c.list_resources()
@@ -228,7 +271,7 @@ def test_list_backend_reports_drift(env):
     ok = subprocess.run(guard_cmd(env[1], ["--list-backend"]), env=env[0], capture_output=True, text=True, timeout=60)
     assert ok.returncode == 0
     rep = json.loads(ok.stdout)
-    assert rep["hidden"] == ["danger_delete", "init_count", "leak", "pr_write"] and rep["missing_upstream"] == []
+    assert rep["hidden"] == ["danger_delete", "init_count", "leak", "load", "pr_write"] and rep["missing_upstream"] == []
     bad = subprocess.run(guard_cmd(env[1], ["--list-backend"], allow="safe_read,renamed_upstream"), env=env[0],
                          capture_output=True, text=True, timeout=60)
     assert bad.returncode == 1 and json.loads(bad.stdout)["missing_upstream"] == ["renamed_upstream"]
