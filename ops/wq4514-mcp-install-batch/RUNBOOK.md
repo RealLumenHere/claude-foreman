@@ -25,8 +25,14 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
 - `--arg-allow TOOL:ARG=v1|v2` closes multiplexed tools to reviewed methods (no PR merge, no review dismiss);
 - `--http-url-arg` pins URL arguments to http(s); `--egress-proxy` forces the browser through the public-only proxy;
 - `--mask-output` runs results through `mask-secrets`, withholding the result if masking fails;
+- `--pins FILE` (wq#4941) hides and refuses any allowlisted tool whose definition (name, title, description,
+  schemas, annotations) no longer hashes to its reviewed pin, or has no pin, and writes a `DRIFT` audit row.
+  The file is the security-gate snapshot layout (`servers["<name>@guarded"].tools`, see
+  `/home/lumen/docs/security/mcp-tool-pins-2026-11.json`); `--pins-surface` picks another entry. A bad
+  file or missing entry refuses to start. Without `--pins`, a changed definition passes but gets a `CHANGED` row;
 - resources and prompts are never exposed; the audit log `~/.local/state/lumen-mcp-guard/<name>.jsonl`
-  records tool names and argument KEYS only, never values.
+  records tool names and argument KEYS only, never values, plus a `START` row with the backend's own
+  serverInfo (the agent only sees the guard's) and a `LIST` row when the backend's tool names change.
 One backend session is held for the guard's lifetime: Go servers (gitea-mcp) refuse a second `initialize`.
 
 ## One-time operator steps (already done 2026-10-23; here so they are reproducible)
@@ -86,6 +92,8 @@ Rollback of one server: `claude mcp remove -s user <name>`; backup of `~/.claude
 Edit the `*_ALLOW` / `*_ARG_ALLOW` pins in `install.sh`, read the tool schema first (`mcp_smoke.py -- <launcher>`
 lists tools; schemas via a Client), extend the smoke test with a refusal or acceptance case, run `install.sh`.
 Any server that can mutate must stay behind the guard.
+With `--pins` wired, a new allowlisted tool or a reviewed upstream upgrade also needs its pin regenerated
+(security-gate `snap.py` against the guarded launcher) after reading the new description and schema.
 
 ## Known limits and follow-ups
 - **fleet-state is the live memory; fleet-memory is a frozen snapshot.** `fleet-memory`'s Postgres
