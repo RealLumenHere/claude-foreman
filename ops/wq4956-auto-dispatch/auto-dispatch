@@ -1,0 +1,676 @@
+#!/usr/bin/env python3
+"""auto-dispatch -- one scan/dispatch pass over open wq tickets (systemd timer, every 5 min).
+
+Automates the by-hand step "look at the open tickets and dispatch-batch them", behind
+Frank's safety gates. STAGED: lumen-auto-dispatch.timer ships DISABLED; Frank approves
+and enables it. Config: /home/lumen/foreman/auto-dispatch.yaml (read every pass).
+Decision log (JSON lines): /home/lumen/foreman/auto-dispatch.log
+
+Pass order (first hit ends the pass, one `halt` line logged):
+  1  halt files        DISPATCH_PAUSE (Frank's kill switch), DISPATCH_DISARM (circuit-breaker
+                       latch), foreman/STOP (usaged stop). Any present -> dispatch nothing.
+  2  broker conflict   old foreman dispatcher armed (timer active, no latch) -> refuse; two
+                       dispatchers on one queue double-spawn.
+  3  budget freshness  usage data stale + on_stale=fail_closed -> halt.
+  4  queue             `wq list --status open <lane>` per lane (open == unclaimed).
+  5  waking hours      inside Frank's window dispatch only if queue > queue_override_threshold.
+  6  concurrency       running fworker units >= max_concurrent_fworkers -> halt.
+  3b failure breaker   >= N tickets dispatched <2h ago are still open (workers died/refused,
+                       the Nov 5 breaker-trip pattern) -> halt until they age out or stick.
+Per ticket (priority order, until free slots are used), each failure is a logged `skip`:
+  lane lease held by another orchestrator | recently dispatched / daily attempt cap |
+  not open or already claimed | the broker's own opt-outs, mirrored from
+  dispatcher/gates.py (Frank-gate markers, [EPIC]/[DO NOT CLAIM], `wq hold`, orch-fresh grace,
+  unmet `gate` path, pending decision gate) | [no-auto] | [needs-window] | unmet deps |
+  model hint (default sonnet; unstamped tickets are router-assigned first) | budget floor.
+NOT mirrored (broker-only, so this service is deliberately weaker there): capability preflight,
+runaway, harness_defect, spawn_loop, fire gates, lane caps. fworker re-checks capability at
+spawn, and the per-ticket cooldown/cap plus the failure breaker bound the damage.
+Pass: `dispatch-batch <id>` (it applies its own admission gate on top of these).
+
+Scope: Max-subscription capacity only. The per-token Anthropic API key behind
+lumen/claude-* in LiteLLM is NOT a budget this script reads or spends (Frank no-spend rule).
+
+usage: auto-dispatch [--dry-run] [--config PATH] [--verbose]
+  --dry-run  decide and log to stdout; no dispatch, no router --live, no ntfy, no state writes.
+exit: 0 normal (incl. halts), 1 pass had failures (also ntfy'd), 2 bad config / lock error.
+
+PARK-AND-RESUME (wq#5009, v3). A worker that needs a decision only Frank can make parks
+its round instead of holding a slot: the ticket sits in frank_gated/pending_review, which
+this script never lists, so a parked ticket costs no slot, no process and no tokens. At
+the top of EVERY pass -- before the halt files, because it dispatches nothing -- the pass
+runs `park.py sweep` (foreman/harness/park.py): it routes Frank's answer onto the card and
+reopens the ticket. A ticket whose round is ANSWERED is a RESUME of an existing session,
+not a new dispatch, so it:
+  - goes first in the candidate order,
+  - is exempt from the redispatch cooldown and the per-day attempt cap,
+  - is not counted by the failure breaker as "dispatched and still open",
+  - is dispatched even inside Frank's waking hours with a small queue (he just answered).
+Halt files, broker conflict, budget, concurrency and every per-ticket gate still apply.
+park_resume.enabled: false turns the hook off. A sweep error is logged, never fatal.
+"""
+import argparse
+import datetime as dt
+import fcntl
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import uuid
+from zoneinfo import ZoneInfo
+
+import yaml
+
+DEFAULT_CONFIG = "/home/lumen/foreman/auto-dispatch.yaml"
+
+DEFAULTS = {
+    "lanes": ["build", "ops", "research"],
+    "max_concurrent_fworkers": 3,
+    "max_dispatch_per_pass": 3,
+    "default_model": "sonnet",
+    "queue_override_threshold": 10,
+    "waking_hours": {"tz": "America/Los_Angeles", "start": "07:00", "end": "23:00"},
+    "halt_files": [
+        "/home/lumen/foreman/DISPATCH_PAUSE",
+        "/home/lumen/autonomy/DISPATCH_DISARM",
+        "/home/lumen/foreman/STOP",
+    ],
+    "no_auto_markers": ["no-auto", "frank-gated", "frank_gated"],
+    "redispatch_cooldown_s": 1800,
+    "max_dispatch_per_ticket_per_day": 2,
+    "failure_breaker": {"threshold": 3, "window_s": 7200},
+    "refuse_if_foreman_broker_armed": True,
+    "foreman_broker": {
+        "timer": "lumen-foreman-dispatch.timer",
+        "disarm_file": "/home/lumen/autonomy/DISPATCH_DISARM",
+        "stop_file": "/home/lumen/foreman/STOP",
+    },
+    "budget": {
+        "state_file": "/home/lumen/foreman/state.json",
+        "max_stale_s": 900,
+        "on_stale": "fail_closed",
+        "min_remaining_pct": {"session": 30, "weekly_all": 15, "fable_weekly_scoped": 10},
+    },
+    "ntfy": {"ok_topic": "lumen-fleet", "fail_topic": "lumen-alerts", "dedup_s": 21600},
+    "log_file": "/home/lumen/foreman/auto-dispatch.log",
+    "log_max_bytes": 5000000,
+    "state_file": "/home/lumen/foreman/auto-dispatch.state.json",
+    "lock_file": "/home/lumen/foreman/.auto-dispatch.lock",
+    "park_resume": {"enabled": True},
+    "bins": {
+        "park": "/home/lumen/foreman/harness/park.py",
+        "wq": "/home/lumen/bin/wq",
+        "dispatch_batch": "/home/lumen/bin/dispatch-batch",
+        "ntfy_send": "/home/lumen/bin/ntfy-send",
+        "router": "/home/lumen/foreman/orchestrator/router.py",
+        "systemctl": "/usr/bin/systemctl",
+    },
+}
+
+SHOW_KEYS = {
+    "id", "lane", "pri", "title", "detail", "deps", "status", "claimed_by", "claimed_at",
+    "done_at", "notes", "created_at", "lease_expires", "subsystems", "gate", "lease_ttl",
+    "model", "effort", "archetype", "gate_type", "decision_prompt", "orch_recommendation",
+    "frank_response", "response_ts", "review_verdict", "review_reason", "block_reason",
+    "blocked_at", "reopened_count", "reopened_at", "lease_owner", "lease_expires_at", "fence",
+    "attempt", "needs", "hold_by", "hold_expires", "deliverable", "created_by", "released_at",
+    "resume_session", "grant_req", "effective_pri",
+}
+LIST_RE = re.compile(r"^\[\s*(\d+)\]\s+(\S+)\s+p(\d+)\s+(?:ep\d+\s+)?(\S+)\s+(.*)$")
+SHOW_RE = re.compile(r"^(\w+)\s*:\s?(.*)$")
+CLOUD_RE = re.compile(r"claude|sonnet|opus|haiku|fable", re.I)
+
+# --- opt-out semantics MIRRORED from the foreman broker (source of truth; keep in step) --------
+# dispatcher/foreman_dispatcher.py + dispatcher/gates.py + harness/cf_hold.py. Mirrored, not
+# imported: the broker module is 131 KB with heavy imports, wrong to load into a 5-min timer.
+# test_auto_dispatch.TestBrokerParity compares these against the live broker functions.
+HUMAN_LANES = {"user", "user-projects", "frank-re", "frank-hw", "frank-funding", "frank-cred"}
+FRANK_TITLE_RE = re.compile(r"\[frank gate\]|\[manual\]|owner\s*=\s*frank", re.I)
+CF_NAMED = r"(?:cloudflare|(?<![A-Za-z0-9])CF[_-](?=[A-Za-z0-9]))"
+CF_ROTATION_HOLD_RE = re.compile(r"\[rotation\].*" + CF_NAMED, re.I)
+NODISPATCH_TITLE_RE = re.compile(r"\[epic\]|\[do[ -]?not[ -]?claim\]", re.I)
+ORCH_CREATOR_PREFIX = "orch-"
+WQ_TS = "%Y-%m-%d %H:%M:%S"
+
+
+def _unset(v):
+    return v in (None, "", "None")
+
+
+def gate_met(gate):
+    """wq `gate` = comma list of `path[:exists|missing]` preconditions (broker gate_met)."""
+    if not gate or not gate.strip():
+        return True, ""
+    for clause in [x.strip() for x in gate.split(",") if x.strip()]:
+        path, cond = clause.rsplit(":", 1) if ":" in clause else (clause, "exists")
+        path, cond = path.strip(), cond.strip().lower()
+        present = os.path.exists(path)
+        if cond == "exists" and not present:
+            return False, "gate: %s missing" % path
+        if cond == "missing" and present:
+            return False, "gate: %s present (must be absent)" % path
+    return True, ""
+
+
+def frank_gate_reason(t):
+    title = t.get("title") or ""
+    if FRANK_TITLE_RE.search(title):
+        return "title marker ([FRANK GATE]/[manual]/owner=frank)"
+    if CF_ROTATION_HOLD_RE.search(title):
+        return "CF-resource rotation hold"
+    if not _unset(t.get("gate_type")) and _unset(t.get("frank_response")):
+        return "decision gate '%s' pending (no frank_response)" % t.get("gate_type")
+    if not _unset(t.get("gate")):
+        ok, why = gate_met(t["gate"])
+        if not ok:
+            return "wq gate unmet (%s)" % why
+    return None
+
+
+def nodispatch_reason(t):
+    return "title marker ([EPIC]/[DO NOT CLAIM])" if NODISPATCH_TITLE_RE.search(t.get("title") or "") else None
+
+
+def hold_reason(t, now_utc):
+    if os.environ.get("FOREMAN_IGNORE_HOLDS") == "1":
+        return None
+    if _unset(t.get("hold_by")) or _unset(t.get("hold_expires")):
+        return None
+    if t["hold_expires"] < now_utc.strftime(WQ_TS):
+        return None
+    return "held by '%s' until %sZ" % (t["hold_by"], t["hold_expires"])
+
+
+def orch_fresh_until(t, now_utc):
+    try:
+        grace = int(os.environ.get("FOREMAN_ORCH_GRACE_MIN", 10))
+    except ValueError:
+        grace = 10
+    if grace <= 0 or not (t.get("created_by") or "").startswith(ORCH_CREATOR_PREFIX):
+        return None
+    if not _unset(t.get("released_at")):
+        return None
+    try:
+        created = dt.datetime.strptime(t.get("created_at") or "", WQ_TS)
+    except ValueError:
+        return None
+    until = (created + dt.timedelta(minutes=grace)).strftime(WQ_TS)
+    return until if until > now_utc.strftime(WQ_TS) else None
+
+
+def deep_merge(base, over):
+    out = dict(base)
+    for k, v in (over or {}).items():
+        out[k] = deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def load_config(path):
+    with open(path) as f:
+        cfg = deep_merge(DEFAULTS, yaml.safe_load(f) or {})
+    if not cfg["lanes"] or int(cfg["max_concurrent_fworkers"]) < 1:
+        raise ValueError("lanes must be non-empty and max_concurrent_fworkers >= 1")
+    if cfg["budget"]["on_stale"] not in ("fail_closed", "advisory"):
+        raise ValueError("budget.on_stale must be fail_closed or advisory")
+    bad = set(cfg["lanes"]) & HUMAN_LANES
+    if bad:
+        raise ValueError("human-owned lanes are never auto-dispatchable: %s" % sorted(bad))
+    ZoneInfo(cfg["waking_hours"]["tz"])
+    for k in ("start", "end"):
+        _hm(cfg["waking_hours"][k])
+    return cfg
+
+
+def _hm(s):
+    h, m = str(s).split(":")
+    return int(h) * 60 + int(m)
+
+
+class Ctx:
+    def __init__(self, cfg, dry_run, verbose, now=None):
+        self.cfg, self.dry_run, self.verbose = cfg, dry_run, verbose
+        self.now = (now or dt.datetime.now(dt.timezone.utc)).astimezone(dt.timezone.utc)  # wq timestamps are UTC
+        self.pass_id = "ad-%s-%s" % (self.now.strftime("%Y%m%dT%H%M%SZ"), uuid.uuid4().hex[:6])
+        self.tz = ZoneInfo(cfg["waking_hours"]["tz"])
+        self.state = {}
+        self.failures = []
+        self.skip_counts = {}
+        self.dispatched = []
+        self.show_cache = {}
+        self.env = dict(os.environ)
+        self.env["PATH"] = "/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin"
+
+    # ---- plumbing ------------------------------------------------------------------
+    def run(self, argv, timeout=30):
+        try:
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=self.env)
+            return p.returncode, p.stdout, p.stderr
+        except FileNotFoundError as e:
+            return 127, "", str(e)
+        except subprocess.TimeoutExpired:
+            return 124, "", "timeout after %ss" % timeout
+
+    def park_sweep(self):
+        """wq#5009: route answered decision cards; return the ids whose parked session is
+        ready to resume. Fail-open: any error means "no resumes this pass", logged."""
+        if not self.cfg["park_resume"]["enabled"]:
+            return set()
+        argv = [sys.executable, self.cfg["bins"]["park"], "sweep"]
+        if self.dry_run:
+            argv.append("--dry-run")
+        rc, out, err = self.run(argv, timeout=120)
+        try:
+            if rc != 0:
+                raise ValueError("rc=%s %s" % (rc, (err or out).strip()[-200:]))
+            res = json.loads(out)
+            ready = {int(i) for i in res.get("ready", [])}
+            actions = {str(k): v for k, v in (res.get("actions") or {}).items()}
+        except (ValueError, TypeError) as e:
+            self.log("park_sweep_error", error=str(e)[:300])
+            return set()
+        if ready or any(v not in ("waiting",) for v in actions.values()):
+            self.log("park_sweep", actions=actions, ready=sorted(ready))
+        return ready
+
+    def log(self, event, **kw):
+        local = self.now.astimezone(self.tz)
+        rec = {"ts": self.now.isoformat(timespec="seconds"),
+               "ts_pt": local.isoformat(timespec="seconds"),
+               "pass": self.pass_id, "event": event}
+        if self.dry_run:
+            rec["dry_run"] = True
+        rec.update(kw)
+        line = json.dumps(rec, ensure_ascii=False)
+        if self.dry_run:
+            print(line)
+            return
+        path = self.cfg["log_file"]
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > int(self.cfg["log_max_bytes"]):
+                os.replace(path, path + ".1")
+            with open(path, "a") as f:
+                f.write(line + "\n")
+        except OSError as e:
+            print("auto-dispatch: cannot write log %s: %s" % (path, e), file=sys.stderr)
+            print(line)
+
+    def fail(self, kind, msg):
+        self.failures.append((kind, msg))
+        self.log("error", kind=kind, reason=msg)
+
+    def skip(self, tid, lane, reason, key=None):
+        """Log a skip only when (ticket, reason-key) changed since last pass (or --verbose)."""
+        key = key or re.sub(r"\d+", "#", reason)
+        self.skip_counts[key] = self.skip_counts.get(key, 0) + 1
+        last = self.state.setdefault("last_skip", {})
+        if self.verbose or self.dry_run or last.get(str(tid)) != key:
+            self.log("skip", ticket=tid, lane=lane, reason=reason)
+        last[str(tid)] = key
+
+    def halt(self, reason, **kw):
+        self.log("halt", reason=reason, **kw)
+        return self.finish(0)
+
+    # ---- state ---------------------------------------------------------------------
+    def load_state(self):
+        try:
+            with open(self.cfg["state_file"]) as f:
+                self.state = json.load(f)
+        except (OSError, ValueError):
+            self.state = {}
+
+    def save_state(self):
+        if self.dry_run:
+            return
+        cutoff = time.time() - 2 * 86400
+        for tid, ts in list(self.state.get("dispatched", {}).items()):
+            ts = [t for t in ts if t > cutoff]
+            if ts:
+                self.state["dispatched"][tid] = ts
+            else:
+                del self.state["dispatched"][tid]
+        open_ids = {str(i) for i in getattr(self, "open_ids", [])}
+        if open_ids:
+            self.state["last_skip"] = {k: v for k, v in self.state.get("last_skip", {}).items() if k in open_ids}
+        tmp = self.cfg["state_file"] + ".tmp"
+        try:
+            with open(tmp, "w") as f:
+                json.dump(self.state, f)
+            os.replace(tmp, self.cfg["state_file"])
+        except OSError as e:
+            print("auto-dispatch: cannot write state: %s" % e, file=sys.stderr)
+
+    # ---- notifications -------------------------------------------------------------
+    def ntfy(self, topic, title, msg, priority=None, dedup_kind=None):
+        if self.dry_run:
+            self.log("ntfy_suppressed", topic=topic, title=title)
+            return
+        if dedup_kind:
+            last = self.state.setdefault("ntfy", {}).get(dedup_kind, 0)
+            if time.time() - last < int(self.cfg["ntfy"]["dedup_s"]):
+                return
+            self.state["ntfy"][dedup_kind] = time.time()
+        argv = [self.cfg["bins"]["ntfy_send"], "-t", topic, "-T", title]
+        if priority:
+            argv += ["-p", priority]
+        rc, _, err = self.run(argv + [msg], timeout=30)
+        if rc != 0:
+            self.log("ntfy_failed", topic=topic, rc=rc, err=err.strip()[:200])
+
+    def finish(self, rc):
+        failures = bool(self.failures)
+        counts = dict(self.skip_counts)
+        self.log("pass_summary", dispatched=[d["ticket"] for d in self.dispatched],
+                 skipped=counts, failures=len(self.failures))
+        if self.dispatched:
+            lines = ["#%s %s (%s)" % (d["ticket"], d["title"][:70], d["model"]) for d in self.dispatched]
+            self.ntfy(self.cfg["ntfy"]["ok_topic"], "auto-dispatch: %d dispatched" % len(self.dispatched),
+                      "\n".join(lines))
+        if failures:
+            self.ntfy(self.cfg["ntfy"]["fail_topic"], "auto-dispatch FAILURE",
+                      "\n".join("%s: %s" % f for f in self.failures)[:900],
+                      priority="high", dedup_kind="fail:" + ",".join(sorted({f[0] for f in self.failures})))
+        self.save_state()
+        return 1 if failures else rc
+
+    # ---- wq ------------------------------------------------------------------------
+    def wq_list(self, lane):
+        rc, out, err = self.run([self.cfg["bins"]["wq"], "list", "--status", "open", lane])
+        if rc != 0:
+            raise RuntimeError("wq list %s rc=%s %s" % (lane, rc, err.strip()[:160]))
+        rows = []
+        for line in out.splitlines():
+            m = LIST_RE.match(line.rstrip())
+            if m and m.group(4) == "open":
+                rows.append({"id": int(m.group(1)), "lane": m.group(2), "pri": int(m.group(3)),
+                             "title": m.group(5).strip()})
+        return rows
+
+    def wq_show(self, tid):
+        if tid in self.show_cache:
+            return self.show_cache[tid]
+        rc, out, _ = self.run([self.cfg["bins"]["wq"], "show", str(tid)])
+        t = None
+        if rc == 0:
+            t, last = {}, None
+            for line in out.splitlines():
+                m = SHOW_RE.match(line)
+                if m and m.group(1) in SHOW_KEYS and m.group(1) not in t:
+                    last = m.group(1)
+                    v = m.group(2).strip()
+                    t[last] = "" if v in ("None", "none", "null") else v
+                elif last and line.strip():
+                    t[last] += " " + line.strip()
+            if str(t.get("id", "")) != str(tid):
+                t = None
+        self.show_cache[tid] = t
+        return t
+
+    def lane_leases(self):
+        rc, out, err = self.run([self.cfg["bins"]["wq"], "orch"])
+        if rc != 0:
+            raise RuntimeError("wq orch rc=%s %s" % (rc, err.strip()[:160]))
+        if "no orchestrator holds" in out.lower():
+            return set()
+        return {l for l in self.cfg["lanes"] if re.search(r"\b%s\b" % re.escape(l), out)}
+
+    def running_fworkers(self):
+        rc, out, err = self.run([self.cfg["bins"]["systemctl"], "list-units", "lumen-job-fworker-*",
+                                 "--state=running", "--no-legend", "--no-pager"])
+        if rc != 0:
+            raise RuntimeError("systemctl list-units rc=%s %s" % (rc, err.strip()[:160]))
+        return sum(1 for l in out.splitlines() if l.strip())
+
+    # ---- gates ---------------------------------------------------------------------
+    def broker_armed(self):
+        b = self.cfg["foreman_broker"]
+        if os.path.exists(b["disarm_file"]) or os.path.exists(b["stop_file"]):
+            return False
+        rc, out, _ = self.run([self.cfg["bins"]["systemctl"], "is-active", b["timer"]])
+        return out.strip() == "active"
+
+    def in_waking_hours(self):
+        w = self.cfg["waking_hours"]
+        local = self.now.astimezone(self.tz)
+        cur, s, e = local.hour * 60 + local.minute, _hm(w["start"]), _hm(w["end"])
+        return (s <= cur < e) if s <= e else (cur >= s or cur < e)
+
+    def budget_state(self):
+        """-> (stale: bool, detail: str, limits: dict). Unreadable == stale."""
+        b = self.cfg["budget"]
+        try:
+            with open(b["state_file"]) as f:
+                st = json.load(f)
+            upd = dt.datetime.fromisoformat(st["updated_at"])
+            since = (self.now - upd).total_seconds()
+            age = float(st.get("cache_age_s") or 0) + max(since, 0)
+            stale = bool(st.get("stale")) or age > float(b["max_stale_s"]) or since > float(b["max_stale_s"])
+            return stale, "last good usage read %.1f days ago" % (age / 86400.0), st.get("limits") or {}
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            return True, "usage state unreadable (%s)" % type(e).__name__, {}
+
+    def budget_check(self, model, stale, detail, limits):
+        """-> None if ok else deny reason. Non-Anthropic models don't draw on the Max pools."""
+        if not CLOUD_RE.search(model):
+            return None
+        if stale:
+            return None if self.cfg["budget"]["on_stale"] == "advisory" else "budget stale: " + detail
+        pools = ["session", "weekly_all"] + (["fable_weekly_scoped"] if "fable" in model.lower() else [])
+        floors = self.cfg["budget"]["min_remaining_pct"]
+        for p in pools:
+            pct = (limits.get(p) or {}).get("percent")
+            if pct is None:
+                return "budget: no %s reading" % p
+            if 100 - float(pct) < float(floors.get(p, 0)):
+                return "budget floor: %s %.0f%% remaining < %s%% reserve" % (p, 100 - float(pct), floors.get(p, 0))
+        return None
+
+    def gate_reason(self, t):
+        """First reason this ticket must not be auto-dispatched, else None (broker-mirrored order)."""
+        if t.get("status") != "open":
+            return "status=%s" % t.get("status")
+        if t.get("claimed_by"):
+            return "already claimed by %s" % t["claimed_by"]
+        r = nodispatch_reason(t)
+        if r:
+            return "nodispatch: " + r
+        r = frank_gate_reason(t)
+        if r:
+            return "Frank-gated: " + r
+        text = (t.get("title", "") + " " + t.get("detail", ""))
+        for m in self.cfg["no_auto_markers"]:
+            if re.search(r"(?<![\w-])(?:--)?\[?%s\]?(?![\w-])" % re.escape(m), text, re.I):
+                return "%s marker (Frank-gated)" % m
+        r = hold_reason(t, self.now)
+        if r:
+            return "hold: " + r
+        r = orch_fresh_until(t, self.now)
+        if r:
+            return "orch-fresh: filed by %s, grace until %sZ" % (t.get("created_by"), r)
+        if re.search(r"\[needs-window\]", t.get("title", ""), re.I):
+            return "[needs-window]: maintenance-window gating lives in foreman_dispatcher"
+        return self.deps_reason(t)
+
+    def deps_reason(self, t):
+        for d in re.findall(r"\d+", t.get("deps", "")):
+            dep = self.wq_show(int(d))
+            st = dep.get("status") if dep else "unreadable"
+            if st != "done":
+                return "unmet dep #%s (%s)" % (d, st)
+        return None
+
+    def resolve_model(self, tid, t):
+        """-> (model, source). Unstamped tickets are router-assigned (the documented pre-dispatch step)."""
+        if t.get("model"):
+            return t["model"], "ticket"
+        if self.dry_run:
+            return self.cfg["default_model"], "default(unstamped; router assign pending)"
+        rc, _, err = self.run(["python3", self.cfg["bins"]["router"], "assign", str(tid), "--live"], timeout=60)
+        self.show_cache.pop(tid, None)
+        t2 = self.wq_show(tid) if rc == 0 else None
+        if t2 and t2.get("model"):
+            t.update(model=t2["model"], effort=t2.get("effort", ""))
+            return t2["model"], "router-assigned"
+        raise RuntimeError("router assign failed rc=%s %s" % (rc, err.strip()[:120]))
+
+    def recently_dispatched(self, tid):
+        ts = self.state.get("dispatched", {}).get(str(tid), [])
+        now = time.time()
+        if ts and now - max(ts) < int(self.cfg["redispatch_cooldown_s"]):
+            return "dispatched %ds ago (cooldown)" % (now - max(ts))
+        if len([x for x in ts if now - x < 86400]) >= int(self.cfg["max_dispatch_per_ticket_per_day"]):
+            return "attempt cap: %d dispatches in 24h" % len(ts)
+        return None
+
+
+def run_pass(ctx):
+    cfg = ctx.cfg
+    ctx.load_state()
+    park_ready = ctx.park_sweep()  # wq#5009: before the halts -- reconciles, never dispatches
+
+    for p in cfg["halt_files"]:
+        if os.path.exists(p):
+            return ctx.halt("halt file present: %s" % p, kind="halt_file")
+
+    if cfg["refuse_if_foreman_broker_armed"] and ctx.broker_armed():
+        return ctx.halt("foreman broker is armed (%s active, no latch): refusing to run a second "
+                        "dispatcher on the same queue" % cfg["foreman_broker"]["timer"], kind="broker_conflict")
+
+    stale, detail, limits = ctx.budget_state()
+    if stale and cfg["budget"]["on_stale"] == "fail_closed":
+        return ctx.halt("budget: %s (on_stale=fail_closed)" % detail, kind="budget_stale")
+
+    cands, seen = [], set()
+    try:
+        for lane in cfg["lanes"]:
+            for r in ctx.wq_list(lane):
+                if r["id"] not in seen:
+                    seen.add(r["id"])
+                    cands.append(r)
+    except RuntimeError as e:
+        ctx.fail("wq_list", str(e))
+        return ctx.finish(1)
+    ctx.open_ids = seen
+    park_ready &= seen  # only a round whose ticket is open in a lane we serve
+    cands.sort(key=lambda r: (0 if r["id"] in park_ready else 1, r["pri"], r["id"]))
+    if not cands:
+        return ctx.halt("queue empty", kind="queue_empty")
+
+    fb = cfg["failure_breaker"]
+    now_ts = time.time()
+    stuck = sorted(int(tid) for tid, ts in ctx.state.get("dispatched", {}).items()
+                   if tid in {str(i) for i in seen} and ts
+                   and int(tid) not in park_ready  # wq#5009: reopened by an answer, not a dead worker
+                   and int(cfg["redispatch_cooldown_s"]) < now_ts - max(ts) < int(fb["window_s"]))
+    if int(fb["threshold"]) > 0 and len(stuck) >= int(fb["threshold"]):
+        msg = ("failure breaker: %d tickets dispatched <%dm ago are still open (worker died/refused): %s"
+               % (len(stuck), int(fb["window_s"]) // 60, ", ".join("#%d" % i for i in stuck[:8])))
+        ctx.ntfy(cfg["ntfy"]["fail_topic"], "auto-dispatch BREAKER", msg, priority="high", dedup_kind="breaker")
+        return ctx.halt(msg, kind="failure_breaker")
+
+    if ctx.in_waking_hours() and len(cands) <= int(cfg["queue_override_threshold"]):
+        if park_ready:
+            # wq#5009: Frank answered a card; resuming that session is not "auto-dispatching
+            # a small queue". Everything else in the queue is still left to him.
+            cands = [c for c in cands if c["id"] in park_ready]
+    if (ctx.in_waking_hours() and len(cands) <= int(cfg["queue_override_threshold"])
+            and not park_ready):
+        return ctx.halt("Frank's waking hours (%s-%s %s) and queue %d <= %d: leaving it to Frank" % (
+            cfg["waking_hours"]["start"], cfg["waking_hours"]["end"], cfg["waking_hours"]["tz"],
+            len(cands), cfg["queue_override_threshold"]), kind="waking_hours")
+
+    try:
+        running = ctx.running_fworkers()
+        held = ctx.lane_leases()
+    except RuntimeError as e:
+        ctx.fail("probe", str(e))
+        return ctx.finish(1)
+    slots = min(int(cfg["max_concurrent_fworkers"]) - running, int(cfg["max_dispatch_per_pass"]))
+    if slots <= 0:
+        return ctx.halt("concurrency ceiling: %d/%d fworkers running" % (running, cfg["max_concurrent_fworkers"]),
+                        kind="concurrency")
+
+    for c in cands:
+        if len(ctx.dispatched) >= slots:
+            break
+        tid, lane = c["id"], c["lane"]
+        if lane in held:
+            ctx.skip(tid, lane, "lane %s lease held by another orchestrator" % lane, "lane-lease")
+            continue
+        r = None if tid in park_ready else ctx.recently_dispatched(tid)  # wq#5009: a resume
+        if r:
+            ctx.skip(tid, lane, r)
+            continue
+        t = ctx.wq_show(tid)
+        if t is None:
+            ctx.skip(tid, lane, "wq show unreadable", "show-unreadable")
+            continue
+        r = ctx.gate_reason(t)
+        if r:
+            ctx.skip(tid, lane, r)
+            continue
+        try:
+            model, msrc = ctx.resolve_model(tid, t)
+        except RuntimeError as e:
+            ctx.fail("router", "#%s %s" % (tid, e))
+            ctx.skip(tid, lane, str(e), "router-failed")
+            continue
+        r = ctx.budget_check(model, stale, detail, limits)
+        if r:
+            ctx.skip(tid, lane, "%s (model %s)" % (r, model), r.split(":")[0])
+            continue
+
+        if ctx.dry_run:
+            ctx.log("dispatch", ticket=tid, lane=lane, model=model, model_source=msrc, title=t["title"][:80],
+                    park_resume=tid in park_ready, note="dry-run: dispatch-batch NOT called")
+            ctx.dispatched.append({"ticket": tid, "title": t["title"], "model": model})
+            continue
+        ctx.state.setdefault("dispatched", {}).setdefault(str(tid), []).append(time.time())
+        ctx.save_state()  # ledger first: a crash after spawn must not allow a double-dispatch
+        rc, out, err = ctx.run([cfg["bins"]["dispatch_batch"], str(tid)], timeout=120)
+        tail = (out.strip() + " " + err.strip()).strip()[-300:]
+        if rc != 0:
+            ctx.fail("dispatch_batch", "#%s rc=%s %s" % (tid, rc, tail))
+            continue
+        ctx.log("dispatch", ticket=tid, lane=lane, model=model, model_source=msrc,
+                title=t["title"][:80], running_before=running, output=tail,
+                park_resume=tid in park_ready)
+        ctx.dispatched.append({"ticket": tid, "title": t["title"], "model": model})
+
+    return ctx.finish(0)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="auto-dispatch: one dispatch pass (see module docstring)")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--config", default=os.environ.get("AUTO_DISPATCH_CONFIG", DEFAULT_CONFIG))
+    ap.add_argument("--verbose", action="store_true", help="log every skip, not just changes")
+    ap.add_argument("--now", help=argparse.SUPPRESS)  # tests only: tz-aware ISO timestamp
+    a = ap.parse_args()
+    try:
+        cfg = load_config(a.config)
+    except Exception as e:  # bad config must be loud, never a silent no-op
+        print("auto-dispatch: bad config %s: %s" % (a.config, e), file=sys.stderr)
+        return 2
+    now = dt.datetime.fromisoformat(a.now) if a.now else None
+    if now is not None and now.tzinfo is None:
+        print("auto-dispatch: --now must be timezone-aware", file=sys.stderr)
+        return 2
+    ctx = Ctx(cfg, a.dry_run, a.verbose, now)
+    lockf = open(cfg["lock_file"], "w")
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        ctx.log("halt", reason="previous pass still running (lock held)", kind="lock")
+        return 0
+    try:
+        return run_pass(ctx)
+    except Exception as e:  # last resort: log + alert, never die silently
+        ctx.fail("crash", "%s: %s" % (type(e).__name__, e))
+        return ctx.finish(1)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

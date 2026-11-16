@@ -1,0 +1,22 @@
+# lumen-auto-dispatch.service -- one auto-dispatch pass (see /home/lumen/bin/auto-dispatch).
+# STAGED: installed but NOT enabled. The timer is the only starter; Frank enables it by hand.
+# Deliberately no [Install] section: this service cannot be enabled at boot, only started by
+# the timer (or manually for a one-off pass: `sudo systemctl start lumen-auto-dispatch.service`).
+# Dry run any time, no side effects:  /home/lumen/bin/auto-dispatch --dry-run
+[Unit]
+Description=Lumen auto-dispatch -- one open-ticket scan/dispatch pass
+Documentation=file:///home/lumen/foreman/auto-dispatch.yaml
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+Environment=PATH=/home/lumen/.npm-global/bin:/home/lumen/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lumen/foreman
+ExecStart=/usr/bin/python3 /home/lumen/bin/auto-dispatch
+# Dead-man's-switch stamp (wq#1184), non-fatal. Only runs when the pass exited 0, so a pass
+# that failed (exit 1: wq down, dispatch-batch error, crash) stops stamping and is visible.
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+# dispatch-batch detaches immediately; 8 min is generous headroom for 3 spawns + probes.
+TimeoutStartSec=480
+Nice=10

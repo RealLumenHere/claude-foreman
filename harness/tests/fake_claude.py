@@ -146,6 +146,15 @@ def main():
     if scenario == "no_init_instant_exit":
         sys.exit(2)
 
+    # wq#5009: a parked session that is gone — `claude --resume <dead id>` exits non-zero
+    # with no stream-json at all.
+    if resume and os.environ.get("FAKE_CLAUDE_RESUME_GONE"):
+        if os.environ.get("FAKE_CLAUDE_SPAWN_LOG"):
+            with open(os.environ["FAKE_CLAUDE_SPAWN_LOG"], "a") as f:
+                f.write("resume-gone\n")
+        sys.stderr.write("No conversation found with session ID: %s\n" % resume)
+        sys.exit(1)
+
     satisfy_acceptance()
     fire_lifecycle("start", session_id, effort)
 
@@ -206,6 +215,39 @@ def main():
             text = "closed it but more remains\nEXIT_SIGNAL: false\nTICKET_CLOSED"
         else:
             text = "landed, see README.md\nTICKET_CLOSED"
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "total_cost_usd": 0.001, "num_turns": 2, "result": text})
+
+    elif scenario in ("park_then_finish", "park_bad_card_then_good", "park_forever"):
+        # wq#5009 park-and-resume: a worker that needs Frank's decision ends its turn on a
+        # ```foreman-park``` card; resumed with the answer (or told about it in a fresh
+        # prompt) it finishes. FAKE_CLAUDE_RESUME_GONE=1 models a parked session that can
+        # no longer be resumed: the CLI dies before any init frame.
+        prompt_text = argv[1] if len(argv) > 1 and argv[0] == "-p" else ""
+        spawn_log = os.environ.get("FAKE_CLAUDE_SPAWN_LOG")
+        if spawn_log:
+            with open(spawn_log, "a") as f:
+                f.write(("resume" if resume else "fresh") + "\n")
+        prompt_log = os.environ.get("FAKE_CLAUDE_PROMPT_LOG")
+        if prompt_log:
+            with open(prompt_log, "a") as f:
+                f.write(json.dumps({"resume": bool(resume), "prompt": prompt_text}) + "\n")
+        decided = ("DECISION RECEIVED" in prompt_text or "DECISION ALREADY MADE" in prompt_text)
+        card = ('```foreman-park\n{"ask": {"title": "Rotate now or after the freeze?", '
+                '"text": "Rotating restarts messenger.", '
+                '"options": ["rotate now", "after freeze"], "recommend": "after freeze"}}\n```')
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        if decided and scenario != "park_forever":
+            if ticket_id:
+                subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                                 "fake worker done after the decision, see README.md"],
+                                capture_output=True, text=True)
+            text = "acted on the decision, see README.md\nEXIT_SIGNAL: true\nTICKET_CLOSED"
+        elif scenario == "park_bad_card_then_good" and "PARK CARD REJECTED" not in prompt_text:
+            text = ('need a decision\n```foreman-park\n{"ask": {"title": "x"}}\n```\n'
+                    'EXIT_SIGNAL: false\nPARKED')
+        else:
+            text = "need a decision\n" + card + "\nEXIT_SIGNAL: false\nPARKED"
         emit({"type": "result", "subtype": "success", "is_error": False,
               "total_cost_usd": 0.001, "num_turns": 2, "result": text})
 

@@ -66,6 +66,7 @@ import deferral_gate
 import hallucination_guard
 import action_gate
 import exit_gate  # noqa: E402 -- wq#5007
+import park as park_mod  # noqa: E402 -- wq#5009
 import failure_record
 import needs as needs_mod
 import capability
@@ -588,7 +589,8 @@ def _ticket_progress_sig(ticket):
     return f"{(ticket or {}).get('status')}|{len(str((ticket or {}).get('notes') or ''))}"
 
 
-def exit_gate_after_loop(ticket_id, worktree, base, events, state, killed_reason):
+def exit_gate_after_loop(ticket_id, worktree, base, events, state, killed_reason,
+                         parked=False):
     """Tell the breaker what this loop did. Progress is a changed worktree, a
     successful file-mutating tool call anywhere, or a changed ticket record; when none
     of those could be measured it is None (never counted against the ticket). A loop
@@ -610,7 +612,7 @@ def exit_gate_after_loop(ticket_id, worktree, base, events, state, killed_reason
                             and sig_after != base["ticket_sig"]))
         if not progress and not measured:
             progress = None
-        parked = getattr(state, "stop_reason", None) in ("tool_deferred",)
+        parked = parked or getattr(state, "stop_reason", None) in ("tool_deferred",)
         err = stats["error_sig"]
         if killed_reason and err:
             err = f"{killed_reason}:{err}"
@@ -909,6 +911,45 @@ def grant_row_by_id(req_id):
 def wq_await_grant(ticket_id, req_id, session_id):
     p = wq("await-grant", str(ticket_id), "--req", str(req_id), "--session", session_id)
     return p.returncode == 0, p.stdout + p.stderr
+
+
+EXIT_PARKED = 27  # wq#5009: the round parked on a decision card for Frank — uncharged,
+#                   no process and no tokens until the answer; the SAME session resumes.
+
+
+def park_card_of(state, prompt, aider_runtime):
+    """(ask, error) for this loop's final message. Only read on a session whose prompt
+    carried the park protocol, so stray fenced text elsewhere can never park a ticket."""
+    if (not park_mod.enabled() or aider_runtime
+            or park_mod.FENCE not in (prompt or "")
+            or not isinstance(state.result_text, str)):
+        return None, None
+    try:
+        return park_mod.parse_card(state.result_text)
+    except Exception as e:
+        log(f"WARN park card parse failed open: {e}")
+        return None, None
+
+
+def handle_park(ticket_id, attempt, state, worktree, ask):
+    """wq#5009: park the round instead of blocking the ticket or holding a slot. Returns
+    EXIT_PARKED, or None when the park is refused (hop limit, wq refusal) — the caller
+    then takes the ordinary exit path, exactly as if no card had been written."""
+    try:
+        rec = park_mod.park_round(ticket_id, state.session_id, worktree, attempt, ask,
+                                  runs_root=RUNS_ROOT, log=log)
+    except park_mod.ParkError as e:
+        log(f"wq#{ticket_id}: park refused ({e}) — ordinary exit path")
+        return None
+    except Exception as e:
+        log(f"WARN wq#{ticket_id}: park failed open ({e}) — ordinary exit path")
+        return None
+    log(f"wq#{ticket_id}: PARKED round {rec['round']} (hop {rec['hops']}/"
+        f"{park_mod.MAX_HOPS}) on card {rec['card']['id'][:8]} "
+        f"\"{rec['card']['title']}\" — session {state.session_id} resumes with Frank's "
+        f"answer; nothing runs until then")
+    print("PARKED")
+    return EXIT_PARKED
 
 
 def handle_tool_deferred(ticket_id, state):
@@ -4416,7 +4457,8 @@ def run_fire_ticket(args):
 
 
 def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None,
-               ceiling_spent=False, grant_resume=False, exit_nudge=None):
+               ceiling_spent=False, grant_resume=False, exit_nudge=None,
+               park_resume=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
@@ -4452,7 +4494,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         # wq#5007: a session older than SESSION_EXPIRY is not resumed — the loop
         # restarts on a fresh session in the same worktree, with prior-attempt notes.
         try:
-            if (resume_session and exit_gate.mode() == "enforce"
+            # wq#5009: a parked round is exempt — Frank may answer days later, and
+            # a session that really is gone has its own fresh-session fallback.
+            if (resume_session and not park_resume
+                    and exit_gate.mode() == "enforce"
                     and exit_gate.session_expired(run_dir(ticket_id), resume_session)):
                 log(f"exit_gate: session {resume_session} is past its "
                     f"{exit_gate.SESSION_EXPIRY_S // 3600}h expiry — fresh session")
@@ -4533,6 +4578,15 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         prompt = load_worker_prompt(ticket_id, ticket, worktree, prior_notes_arg,
                                      acceptance_doc=acceptance_doc, rework=rework,
                                      archetype=archetype)
+    # wq#5009: a FRESH session on a ticket whose decision card Frank already answered
+    # is told the decision — the answer must not depend on one session staying alive.
+    if not resume_session and park_mod.enabled():
+        try:
+            park_ctx = park_mod.decision_context(ticket_id, runs_root=RUNS_ROOT)
+            if park_ctx:
+                prompt = f"{prompt}\n\n{park_ctx}"
+        except Exception as e:
+            log(f"WARN park decision context failed open: {e}")
     # wq#2128: a prompt that cannot fit the served context is a harness fault, refused
     # before any token is spent and never charged (SpawnRefused writes no attempt record).
     # wq#2185: the size gate counts the CLI's own fixed request too (the local profile's
@@ -4617,7 +4671,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # wq#4765 (§2.3 step 6, §2.7 F9): a grant-approved resume spawns with --resume <sid>
     # and NO prompt — the CLI drops the deferred call if a resume carries one, so
     # grant_resume forces prompt=None here regardless of what load_worker_prompt built.
-    cmd = build_claude_cmd(None if grant_resume else (steer or exit_nudge or prompt),
+    cmd = build_claude_cmd(None if grant_resume else
+                           (steer or exit_nudge
+                            or (park_resume or {}).get("prompt") or prompt),
                             args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin,
@@ -4634,6 +4690,12 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # claim itself — see handle_external_sigterm().
     set_sigterm_context(ticket_id, attempt, worker_id)
     gate_base = exit_gate_before_loop(ticket_id, worktree, attempt, ticket)  # wq#5007
+    if park_resume:
+        # wq#5009: every spawn gate has passed — only now is the answer consumed.
+        try:
+            park_mod.mark_resumed(ticket_id, runs_root=RUNS_ROOT)
+        except Exception as e:
+            log(f"WARN park mark_resumed failed open: {e}")
     t0 = time.time()
     rate_limits_start = read_rate_limits_snapshot()
     # wq#1888 despag P2-2: the one call-site diff the gateway canary needs — which
@@ -4651,8 +4713,33 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker, first_frame_s=first_frame_s,
         post_result_bg_grace_s=getattr(args, "post_result_bg_grace", None))
+    park_ask, park_err = park_card_of(state, prompt, aider_runtime)  # wq#5009
     gate_loop = exit_gate_after_loop(ticket_id, worktree, gate_base, events, state,
-                                     killed_reason)  # wq#5007
+                                     killed_reason, parked=bool(park_ask))  # wq#5007
+    if (park_resume and resume_session and not state.session_id
+            and exit_code != 0 and killed_reason is None):
+        # wq#5009: the parked session could not be resumed (pruned / expired): no
+        # init frame, nothing spent. Session is an optimisation, not a correctness
+        # requirement — start fresh in the same worktree; decision_context() puts
+        # Frank's answer in the new prompt. Same attempt number.
+        log(f"wq#{ticket_id}: parked session {resume_session} could not be resumed "
+            f"(exit {exit_code}, no init frame) — fresh session with the decision "
+            f"in context")
+        return do_attempt(args, attempt, prior_worktree=worktree)
+    if state.session_id and killed_reason in (None, "post_result_stuck"):
+        if park_ask:
+            outcome = handle_park(ticket_id, attempt, state, worktree, park_ask)
+            if outcome is not None:
+                return outcome
+        elif park_err and not exit_nudge:
+            # a malformed card gets ONE rewrite request in the same session, same
+            # attempt; a second bad card is ignored and the exit judged as it stands.
+            log(f"wq#{ticket_id}: park card rejected ({park_err}) — asking the "
+                f"session to rewrite it")
+            return do_attempt(args, attempt, resume_session=state.session_id,
+                              prior_worktree=worktree,
+                              ceiling_spent=loop_tracker.ceiling_spent,
+                              exit_nudge=park_mod.rewrite_text(park_err))
     if state.stop_reason == "tool_deferred":
         # wq#4765 (§2.3 steps 2-3): the turn ended on a PreToolUse `defer`, clean exit
         # (killed_reason is None here — the CLI itself stopped the turn, no watchdog
@@ -5814,7 +5901,23 @@ def cmd_run(args):
     # resume" and nothing else: every path that returns a ticket to `open` any other
     # way (release, a fresh dispatch) clears resume_session/grant_req first.
     resume_sid = wq_show(args.ticket).get("resume_session")
+    # wq#5009: an ANSWERED park round means this claim is the resume of a session that
+    # parked on a decision card. Peeked here, consumed in do_attempt once every spawn
+    # gate has passed. The parked leg was uncharged, so `attempt` is the same number
+    # and make_worktree() adopts the worktree it ran in (wq#4765 precedent).
+    park_resume = None
+    if not resume_sid and park_mod.enabled():
+        try:
+            park_resume = park_mod.peek_resume(args.ticket, runs_root=RUNS_ROOT)
+        except Exception as e:
+            log(f"WARN park peek failed open: {e}")
     try:
+        if park_resume and park_resume.get("session_id"):
+            log(f"wq#{args.ticket}: park-and-resume round {park_resume['round']} — "
+                f"resuming session {park_resume['session_id']} with Frank's answer, "
+                f"same attempt {attempt}")
+            return do_attempt(args, attempt, resume_session=park_resume["session_id"],
+                              park_resume=park_resume)
         if resume_sid:
             log(f"wq#{args.ticket}: grant-approved resume (session {resume_sid}) — "
                 f"spawning --resume with no prompt, same attempt {attempt}")
@@ -5958,10 +6061,12 @@ def main():
     # meaningfully, and LIMIT means the whole login is throttled (a kicked pass would
     # just be governor-denied), so neither kicks. Fail-open, after the exit code is
     # fixed so it can't perturb the outcome.
-    if getattr(args, "func", None) is cmd_run and rc in (EXIT_OK, EXIT_BLOCKED, EXIT_LOCAL_ESCALATED):
+    # wq#5009: a parked round freed its slot too — that is the point of parking.
+    if getattr(args, "func", None) is cmd_run and rc in (EXIT_OK, EXIT_BLOCKED,
+                                                       EXIT_LOCAL_ESCALATED, EXIT_PARKED):
         trigger_refill(getattr(args, "ticket", "?"),
                        {EXIT_OK: "done", EXIT_BLOCKED: "blocked",
-                        EXIT_LOCAL_ESCALATED: "escalated"}[rc])
+                        EXIT_LOCAL_ESCALATED: "escalated", EXIT_PARKED: "parked"}[rc])
     sys.exit(rc if isinstance(rc, int) else 0)
 
 

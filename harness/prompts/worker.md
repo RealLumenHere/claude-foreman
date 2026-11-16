@@ -131,6 +131,17 @@ RULES:
 
 {{ARCHETYPE_ADDENDUM}}
 
+Decision only Frank can make (wq#5009 park-and-resume): when finishing needs a choice,
+an approval or a physical act that is Frank's alone, do not `wq block` and do not wait.
+Commit what you have, then end your final message with a decision card and the two
+closing lines `EXIT_SIGNAL: false` and `PARKED`:
+```foreman-park
+{"ask": {"title": "<the decision, one line>", "text": "<what you found and what each option costs>", "options": ["<A>", "<B>"], "recommend": "<one of options>"}}
+```
+The harness parks THIS session (no process, no tokens while it waits), sends Frank the
+card, and resumes you with his answer as your next turn. Only for a decision that is
+really his: anything you can settle from evidence, settle yourself and record why.
+
 Exit contract (wq#5007 — the harness accepts an exit as a completion only on BOTH an
 explicit signal from you AND its own verification). End your final message with
 exactly these two lines, nothing after them:

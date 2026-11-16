@@ -26,6 +26,7 @@ sys.path.insert(0, HARNESS_DIR)
 import acceptance  # noqa: E402
 import classifier  # noqa: E402 -- wq#1915(A): parse_worker_sentinel + sentinel set
 import exit_gate  # noqa: E402 -- wq#5007: dual-condition exit gate
+import park  # noqa: E402 -- wq#5009: park-and-resume decision cards
 
 MAX_BLOCKS = 3
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
@@ -70,6 +71,12 @@ def decide(hook_input):
                 or hook_input.get("cwd") or os.getcwd())
     ticket_id = os.environ.get(TICKET_ENV)
     transcript_path = hook_input.get("transcript_path")
+    # wq#5009: a session ending on a valid decision card is parking, not quitting —
+    # fworker stores the session and resumes it with Frank's answer. None of the
+    # convergence nudges below apply to a stop that is going to be resumed.
+    if park.enabled() and park.parse_card(
+            _transcript_last_assistant_text(transcript_path))[0]:
+        return ALLOW, ""
     done = _ticket_is_done(ticket_id)
 
     # wq#1905: prefer the run_dir copy pin() wrote at dispatch and never touches again —
