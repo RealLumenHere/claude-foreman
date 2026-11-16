@@ -23,7 +23,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-auto-dispatch.timer"   "$UNITS/lumen-auto-dispatch.timer"
   vflag "$BIN" --dry-run
   vcontains "$BIN" "park_sweep"
-  vcontains /home/lumen/foreman/harness/park.py "def sweep("
+  vcontains /home/lumen/foreman/harness/park.py "def sweep_one"   # vcontains is a regex: no bare parens
   vdone
 fi
 
