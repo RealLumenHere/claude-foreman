@@ -131,7 +131,15 @@ RULES:
 
 {{ARCHETYPE_ADDENDUM}}
 
-Print exactly one sentinel as the last line: TICKET_CLOSED | BLOCKED | CLAIM_ERROR.
+Exit contract (wq#5007 — the harness accepts an exit as a completion only on BOTH an
+explicit signal from you AND its own verification). End your final message with
+exactly these two lines, nothing after them:
+EXIT_SIGNAL: true|false
+TICKET_CLOSED | BLOCKED | CLAIM_ERROR
+`EXIT_SIGNAL: true` goes only with TICKET_CLOSED, and only after the work has landed
+and `wq done` has run; anything unfinished, blocked or released is
+`EXIT_SIGNAL: false`. A missing EXIT_SIGNAL line reads as false: the harness will
+block your stop or resume you once to ask for it. The sentinel stays the last line.
 
 ---
 

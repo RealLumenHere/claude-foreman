@@ -57,6 +57,7 @@ from classifier import (
     RunState, classify, parse_worker_sentinel,
     SUCCESS, LIMIT, INDETERMINATE, AUTH, HANG, DEGRADED_SUCCESS, FALSE_COMPLETE, OOM,
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
+    TICKET_CLOSED_SENTINEL,
     PERMISSION_LOOP, MODEL_NOT_FOUND, AUTH_DENIED,
 )
 from oom_forensics import oom_journal_evidence
@@ -64,6 +65,7 @@ import acceptance as acceptance_mod
 import deferral_gate
 import hallucination_guard
 import action_gate
+import exit_gate  # noqa: E402 -- wq#5007
 import failure_record
 import needs as needs_mod
 import capability
@@ -510,6 +512,142 @@ BLOCK_HARNESS_DEFECT = "HARNESS_DEFECT"
 _INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM, AUTH_DENIED}
 _LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET}
 _HARNESS_DEFECT_CLASSIFICATIONS = {PERMISSION_LOOP, MODEL_NOT_FOUND}
+
+
+# --------------------------------------------------------------------------
+# wq#5007: exit gate / circuit breaker glue (harness/exit_gate.py). Every helper here
+# fails OPEN to the pre-wq#5007 behaviour and says so in the log: verify_done() and
+# check_artifacts_done() stay the fail-closed wall behind the gate, so a bug in this
+# glue can cost a nudge, never a wedged fleet.
+# --------------------------------------------------------------------------
+
+def _breaker(ticket_id):
+    return exit_gate.CircuitBreaker(
+        os.path.join(run_dir(ticket_id), exit_gate.BREAKER_FILENAME))
+
+
+def exit_gate_preflight(ticket_id, count_call=True):
+    """Reason string when this loop must not be spawned (circuit OPEN inside its
+    cooldown, or the hourly call limit is spent); None to go ahead. shadow mode logs
+    what it would have refused and returns None."""
+    gate_mode = exit_gate.mode()
+    if gate_mode == "off":
+        return None
+    try:
+        allow, why = _breaker(ticket_id).preflight()
+        if allow and why:
+            log(f"exit_gate: wq#{ticket_id} {why}")
+        if allow and count_call:
+            allow, why = exit_gate.take_call(RUNS_ROOT, ticket_id)
+        if not allow:
+            if gate_mode == "shadow":
+                log(f"exit_gate[shadow]: would refuse wq#{ticket_id}: {why}")
+                return None
+            return why
+    except Exception as e:
+        log(f"WARN exit_gate preflight failed open: {e}")
+    return None
+
+
+def exit_gate_defer(ticket_id, why):
+    """Release the claim and leave a soft hold for the cooldown so the next dispatch
+    tick does not walk straight back into the same refusal."""
+    log(f"DEFERRED: wq#{ticket_id} {why} — releasing claim")
+    try:
+        wq("note", str(ticket_id), f"[exit_gate wq#5007] {why}")
+    except Exception:
+        pass
+    wq_release(ticket_id)
+    try:
+        ttl = max(1, exit_gate.CB_COOLDOWN_S // 60)
+        wq("hold", str(ticket_id), "--agent", "exit-gate", "--ttl", str(ttl))
+    except Exception:
+        pass
+    print("DEFERRED")
+    return EXIT_DEFERRED
+
+
+def exit_gate_before_loop(ticket_id, worktree, attempt, ticket):
+    """Per-loop git backup + the progress baseline. Returns the baseline dict."""
+    base = {"fp": None, "ticket_sig": None, "backup_ref": None}
+    if exit_gate.mode() == "off":
+        return base
+    try:
+        base["backup_ref"] = exit_gate.git_backup(
+            worktree, ticket_id, f"a{attempt}")
+        if base["backup_ref"]:
+            log(f"exit_gate: loop backup -> {base['backup_ref']}")
+        base["fp"] = exit_gate.worktree_fingerprint(worktree)
+        base["ticket_sig"] = _ticket_progress_sig(ticket)
+    except Exception as e:
+        log(f"WARN exit_gate backup/baseline failed open: {e}")
+    return base
+
+
+def _ticket_progress_sig(ticket):
+    return f"{(ticket or {}).get('status')}|{len(str((ticket or {}).get('notes') or ''))}"
+
+
+def exit_gate_after_loop(ticket_id, worktree, base, events, state, killed_reason):
+    """Tell the breaker what this loop did. Progress is a changed worktree, a
+    successful file-mutating tool call anywhere, or a changed ticket record; when none
+    of those could be measured it is None (never counted against the ticket). A loop
+    that parked on a hold or ended on a question holds the counters steady."""
+    if exit_gate.mode() == "off":
+        return None
+    try:
+        stats = exit_gate.loop_stats(events)
+        exit_gate.note_session(run_dir(ticket_id), state.session_id)
+        fp_after = exit_gate.worktree_fingerprint(worktree)
+        try:
+            sig_after = _ticket_progress_sig(wq_show(ticket_id))
+        except Exception:
+            sig_after = None
+        measured = base.get("fp") is not None and fp_after is not None
+        progress = bool(stats["mutations"]
+                        or (measured and fp_after != base["fp"])
+                        or (sig_after is not None and base.get("ticket_sig") is not None
+                            and sig_after != base["ticket_sig"]))
+        if not progress and not measured:
+            progress = None
+        parked = getattr(state, "stop_reason", None) in ("tool_deferred",)
+        err = stats["error_sig"]
+        if killed_reason and err:
+            err = f"{killed_reason}:{err}"
+        cb = _breaker(ticket_id)
+        new_state = cb.record_loop(progress, error_sig=err,
+                                   output_chars=stats["output_chars"],
+                                   asking_questions=stats["asking_questions"] or parked)
+        if new_state != exit_gate.CLOSED:
+            log(f"exit_gate: wq#{ticket_id} circuit {new_state} ({cb.s.get('reason')})")
+            if new_state == exit_gate.OPEN:
+                ntfy("foreman circuit OPEN",
+                     f"wq#{ticket_id}: {cb.s.get('reason')} — no new loop for "
+                     f"{exit_gate.CB_COOLDOWN_S // 60} min, then one half-open probe",
+                     priority="high")
+        stats["progress"] = progress
+        stats["circuit"] = new_state
+        stats.pop("final_text", None)
+        return stats
+    except Exception as e:
+        log(f"WARN exit_gate loop record failed open: {e}")
+        return None
+
+
+def exit_gate_decide(ticket_id, raw_classification, worker_sentinel, landed_sha, state):
+    """The dual-condition verdict for a worker exit the harness is about to accept."""
+    try:
+        status = wq_show(ticket_id).get("status")
+    except Exception:
+        status = None
+    indicators = {
+        "clean_result": raw_classification == SUCCESS,
+        "ticket_done": status == "done",
+        "landed_commit": bool(landed_sha),
+        "closed_sentinel": worker_sentinel == TICKET_CLOSED_SENTINEL,
+    }
+    text = state.result_text if isinstance(state.result_text, str) else ""
+    return exit_gate.decide(indicators, exit_gate.parse_exit_signal(text)), status
 
 
 def loop_break_classification(raw_classification, killed_reason, loop_tracker):
@@ -4278,7 +4416,7 @@ def run_fire_ticket(args):
 
 
 def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=None,
-               ceiling_spent=False, grant_resume=False):
+               ceiling_spent=False, grant_resume=False, exit_nudge=None):
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
@@ -4303,6 +4441,24 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         wq_release(ticket_id)
         print("DEFERRED")
         return EXIT_DEFERRED
+
+    # wq#5007: circuit breaker + hourly call limit — refused before a token is spent,
+    # for every loop (fresh spawn and in-process resume alike). A grant-approved
+    # resume is exempt: Frank's approval is spent on exactly this spawn (wq#4765).
+    if not grant_resume:
+        gate_refusal = exit_gate_preflight(ticket_id)
+        if gate_refusal:
+            return exit_gate_defer(ticket_id, gate_refusal)
+        # wq#5007: a session older than SESSION_EXPIRY is not resumed — the loop
+        # restarts on a fresh session in the same worktree, with prior-attempt notes.
+        try:
+            if (resume_session and exit_gate.mode() == "enforce"
+                    and exit_gate.session_expired(run_dir(ticket_id), resume_session)):
+                log(f"exit_gate: session {resume_session} is past its "
+                    f"{exit_gate.SESSION_EXPIRY_S // 3600}h expiry — fresh session")
+                resume_session, steer, exit_nudge = None, None, None
+        except Exception as e:
+            log(f"WARN exit_gate session expiry check failed open: {e}")
 
     if args.max_turns:
         max_turns = args.max_turns
@@ -4448,11 +4604,20 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     env[action_gate.HANDOFF_ENV] = run_dir(ticket_id)
     loop_tracker = action_gate.LoopTracker(steered=bool(steer),
                                            ceiling_spent=ceiling_spent)
+    # wq#5007: same-error needs 5 occurrences, not 3; no-progress triggers stay at 3.
+    if exit_gate.mode() == "enforce":
+        loop_tracker = exit_gate.CircuitLoopTracker(loop_tracker)
+    # wq#5007: the gate is only enforced on a session whose prompt carried the
+    # EXIT_SIGNAL contract (worker.md); other prompt families are recorded, not gated.
+    exit_gate_enforced = (exit_gate.mode() == "enforce" and not aider_runtime
+                          and exit_gate.PROTOCOL_MARKER in (prompt or ""))
+    if exit_gate_enforced:
+        env["FOREMAN_EXIT_GATE_PROTOCOL"] = "1"
     settings_file = resolve_worker_settings(args.repo, ticket_id, archetype=archetype)
     # wq#4765 (§2.3 step 6, §2.7 F9): a grant-approved resume spawns with --resume <sid>
     # and NO prompt — the CLI drops the deferred call if a resume carries one, so
     # grant_resume forces prompt=None here regardless of what load_worker_prompt built.
-    cmd = build_claude_cmd(None if grant_resume else (steer or prompt),
+    cmd = build_claude_cmd(None if grant_resume else (steer or exit_nudge or prompt),
                             args.model, args.effort, settings_file,
                             add_dirs=add_dirs, max_turns=max_turns,
                             resume_session=resume_session, claude_bin=args.claude_bin,
@@ -4468,6 +4633,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # external SIGTERM (unit stop) must charge a minimal KILLED record and release the
     # claim itself — see handle_external_sigterm().
     set_sigterm_context(ticket_id, attempt, worker_id)
+    gate_base = exit_gate_before_loop(ticket_id, worktree, attempt, ticket)  # wq#5007
     t0 = time.time()
     rate_limits_start = read_rate_limits_snapshot()
     # wq#1888 despag P2-2: the one call-site diff the gateway canary needs — which
@@ -4485,6 +4651,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker, first_frame_s=first_frame_s,
         post_result_bg_grace_s=getattr(args, "post_result_bg_grace", None))
+    gate_loop = exit_gate_after_loop(ticket_id, worktree, gate_base, events, state,
+                                     killed_reason)  # wq#5007
     if state.stop_reason == "tool_deferred":
         # wq#4765 (§2.3 steps 2-3): the turn ended on a PreToolUse `defer`, clean exit
         # (killed_reason is None here — the CLI itself stopped the turn, no watchdog
@@ -4662,6 +4830,71 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
             f"self-report, treating as FALSE_COMPLETE.")
         classification = FALSE_COMPLETE
 
+    # wq#5007 dual-condition exit gate: an exit the artifact checks above just
+    # accepted still needs >= 2 harness-verified indicators AND the worker's explicit
+    # EXIT_SIGNAL: true. `ticket_done` kills are exempt — the harness stopped that
+    # session itself, there is no worker exit claim to gate.
+    gate_nudge = None
+    gate_info = {"mode": exit_gate.mode(), "enforced": exit_gate_enforced,
+                 "loop": gate_loop, "backup_ref": gate_base.get("backup_ref")}
+    if (exit_gate.mode() != "off" and killed_reason != "ticket_done"
+            and classification in (SUCCESS, DEGRADED_SUCCESS)
+            and not sentinel_confirmed_block and not sentinel_confirmed_claim_error):
+        try:
+            _, gate_landed_sha = check_artifacts_done(ticket_id, worktree)
+            gate_decision, gate_status = exit_gate_decide(
+                ticket_id, raw_classification, worker_sentinel, gate_landed_sha, state)
+            gate_info.update(exit=gate_decision.exit, reason=gate_decision.reason,
+                             indicators=gate_decision.indicators,
+                             signal=gate_decision.signal)
+            if gate_decision.exit:
+                _breaker(ticket_id).reset("exit")
+            elif exit_gate_enforced:
+                log(f"exit_gate: wq#{ticket_id} exit NOT accepted "
+                    f"({gate_decision.reason}; indicators={gate_decision.indicators}; "
+                    f"EXIT_SIGNAL={gate_decision.signal})")
+                if state.session_id and not exit_nudge:
+                    gate_nudge = exit_gate.nudge_text(gate_decision, ticket_id)
+                elif (gate_decision.signal is None and gate_status == "done"
+                        and len(gate_decision.indicators) >= exit_gate.MIN_INDICATORS):
+                    # Safety valve (Ralph v0.10.1 forces an exit on repeated
+                    # completion indicators without the signal): the worker was
+                    # asked once and still sent no EXIT_SIGNAL, but the ticket is
+                    # done and the harness verified it. Two consecutive loops with
+                    # the indicators held end the loop as DEGRADED_SUCCESS — never
+                    # plain SUCCESS, and never on an explicit `false`.
+                    log(f"exit_gate: wq#{ticket_id} safety valve — no EXIT_SIGNAL "
+                        f"after the nudge, ticket verified done "
+                        f"({gate_decision.indicators}); accepting as "
+                        f"DEGRADED_SUCCESS")
+                    gate_info["safety_valve"] = True
+                    classification = DEGRADED_SUCCESS
+                    _breaker(ticket_id).reset("exit (safety valve)")
+                else:
+                    classification = FALSE_COMPLETE
+                # An explicit `false` on a ticket that is not itself done means the
+                # worker says more work remains: a commit that merely names the
+                # ticket must not close it (handle_resumable_failure honours this).
+                if (not gate_nudge and gate_decision.signal is False
+                        and gate_status != "done"):
+                    state.exit_gate_explicit_false = True
+            else:
+                log(f"exit_gate[{exit_gate.mode()}]: wq#{ticket_id} would not accept "
+                    f"this exit ({gate_decision.reason}) — recorded only")
+        except Exception as e:
+            log(f"WARN exit_gate decision failed open: {e}")
+            gate_info["error"] = str(e)[:200]
+            gate_nudge = None
+    if gate_nudge:
+        # one corrective resume, same attempt number (wq#2138 precedent): a missing
+        # closing line must not cost the ticket an attempt. Outside the try above on
+        # purpose — an exception in the resumed loop is that loop's own, never a
+        # reason to accept this exit.
+        return do_attempt(args, attempt, resume_session=state.session_id,
+                          prior_worktree=worktree,
+                          ceiling_spent=loop_tracker.ceiling_spent,
+                          exit_nudge=gate_nudge)
+
     log(f"attempt {attempt}: classification={classification} raw={raw_classification} "
         f"exit={exit_code} killed_reason={killed_reason} turns={state.turns} "
         f"elapsed={elapsed:.0f}s cpu_s={cpu_s:.1f} session_id={state.session_id}")
@@ -4689,6 +4922,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         "exit_code": exit_code, "cpu_s": cpu_s, "oauth_token_used": oauth_token_used,
         "oom_journal": oom_journal,
         "killed_reason": killed_reason, "loop_reason": loop_tracker.tripped,
+        "exit_gate": gate_info,  # wq#5007
         "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
@@ -5088,6 +5322,12 @@ def handle_resumable_failure(args, ticket_id, attempt, classification, state, ev
     MAX_ATTEMPTS path once attempts are exhausted or there is no session_id to resume.
     """
     confirmed, landed_sha = check_artifacts_done(ticket_id, worktree)
+    if confirmed and getattr(state, "exit_gate_explicit_false", False):
+        # wq#5007: the worker itself said EXIT_SIGNAL: false on a ticket that is not
+        # done — a commit naming the ticket is not a completion over its objection.
+        log(f"{classification}: a landed commit names wq#{ticket_id} but the worker "
+            f"reported EXIT_SIGNAL: false — not closing on the artifact alone.")
+        confirmed = False
     if confirmed:
         log(f"{classification} but artifacts confirm the ticket actually landed "
             f"(session {state.session_id}) — verifying beats trusting the missing/odd "
@@ -5541,6 +5781,14 @@ def cmd_run(args):
     # pin the ticket identity here — before the claim — and every later call is the holder
     # rather than a fresh `lumen:<pid>` that wq has to wave through.
     os.environ["WQ_AGENT"] = wq_identity(args.ticket)
+
+    # wq#5007: same pre-claim treatment for an OPEN circuit — the claim is never
+    # touched while a ticket is cooling down (the call is counted in do_attempt).
+    gate_refusal = exit_gate_preflight(args.ticket, count_call=False)
+    if gate_refusal:
+        log(f"DEFERRED: wq#{args.ticket} {gate_refusal}")
+        print("DEFERRED")
+        return EXIT_DEFERRED
 
     claimed, msg = wq_claim(args.ticket)
     if not claimed:

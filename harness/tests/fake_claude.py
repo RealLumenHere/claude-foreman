@@ -29,6 +29,14 @@ NEAR_LIMIT_RESET_S = float(os.environ.get("FAKE_CLAUDE_LIMIT_RESET_S", "7"))
 
 
 def emit(frame):
+    # wq#5007: a current worker ends a successful exit with the exit contract
+    # (prompts/worker.md). A success frame that carries no result text at all models
+    # that worker; scenarios that set `result` themselves are left exactly as
+    # written, and FAKE_CLAUDE_NO_EXIT_SIGNAL=1 models a pre-contract worker.
+    if (frame.get("type") == "result" and frame.get("subtype") == "success"
+            and not frame.get("is_error") and "result" not in frame
+            and not os.environ.get("FAKE_CLAUDE_NO_EXIT_SIGNAL")):
+        frame = dict(frame, result="EXIT_SIGNAL: true\nTICKET_CLOSED")
     print(json.dumps(frame), flush=True)
 
 
@@ -178,6 +186,29 @@ def main():
         emit({"type": "result", "subtype": "success", "is_error": False,
               "total_cost_usd": 0.001, "num_turns": 2})
 
+    elif scenario in ("exit_signal_ok", "exit_signal_missing_then_ok",
+                      "exit_signal_never", "exit_signal_false_done"):
+        # wq#5007 exit gate: a worker that closes its ticket and then does / does not
+        # carry the explicit EXIT_SIGNAL line. FAKE_CLAUDE_SPAWN_LOG counts invocations
+        # so a test can prove how many loops the gate cost.
+        spawn_log = os.environ.get("FAKE_CLAUDE_SPAWN_LOG")
+        if spawn_log:
+            with open(spawn_log, "a") as f:
+                f.write(("resume" if resume else "fresh") + "\n")
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        if ticket_id and not resume:
+            subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                             "fake worker done, see README.md"],
+                            capture_output=True, text=True)
+        if scenario == "exit_signal_ok" or (scenario == "exit_signal_missing_then_ok" and resume):
+            text = "landed, see README.md\nEXIT_SIGNAL: true\nTICKET_CLOSED"
+        elif scenario == "exit_signal_false_done":
+            text = "closed it but more remains\nEXIT_SIGNAL: false\nTICKET_CLOSED"
+        else:
+            text = "landed, see README.md\nTICKET_CLOSED"
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "total_cost_usd": 0.001, "num_turns": 2, "result": text})
+
     elif scenario == "denied_verb_blocked":
         rc = fire_hook("Bash", {"command": "docker compose down --remove-orphans"},
                         session_id, effort)
@@ -274,7 +305,8 @@ def main():
             subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
                              "fake worker done, see README.md"],
                             capture_output=True, text=True)
-        emit({"type": "result", "subtype": "success", "is_error": False, "result": "done"})
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "result": "done\nEXIT_SIGNAL: true\nTICKET_CLOSED"})   # wq#5007 exit contract
         time.sleep(float(os.environ.get("FAKE_CLAUDE_STUCK_S", "3600")))
 
     elif scenario == "success_false_complete":

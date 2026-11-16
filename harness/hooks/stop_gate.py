@@ -25,6 +25,7 @@ sys.path.insert(0, HARNESS_DIR)
 
 import acceptance  # noqa: E402
 import classifier  # noqa: E402 -- wq#1915(A): parse_worker_sentinel + sentinel set
+import exit_gate  # noqa: E402 -- wq#5007: dual-condition exit gate
 
 MAX_BLOCKS = 3
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
@@ -98,7 +99,70 @@ def decide(hook_input):
         if trap is not None:
             return trap
 
+    gate = _exit_gate_block(hook_input, ticket_id, done, worktree, transcript_path)
+    if gate is not None:
+        return gate
+
     return ALLOW, ""
+
+
+def _ticket_status(ticket_id):
+    if not ticket_id:
+        return None
+    try:
+        p = subprocess.run([WQ_BIN, "show", str(ticket_id)],
+                           capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in p.stdout.splitlines():
+        if line.startswith("status") and ":" in line:
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def _branch_has_commits(worktree):
+    try:
+        p = subprocess.run(["git", "-C", worktree, "log", "--oneline", "-1",
+                            "origin/main..HEAD"],
+                           capture_output=True, text=True, timeout=15)
+        return p.returncode == 0 and bool(p.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _exit_gate_block(hook_input, ticket_id, done, worktree, transcript_path):
+    """wq#5007: the in-session half of the dual-condition exit gate — the worker is
+    told at the moment it tries to stop, instead of being resumed afterwards. Only
+    armed when fworker says this session's prompt carried the EXIT_SIGNAL contract
+    (FOREMAN_EXIT_GATE_PROTOCOL=1). Shares the MAX_BLOCKS cap, fails open on an
+    unreadable transcript, and steps aside for every legitimate non-completion
+    stop: a BLOCKED/CLAIM_ERROR sentinel, or a ticket that has already left this
+    worker's hands (released, blocked, parked)."""
+    if os.environ.get("FOREMAN_EXIT_GATE_PROTOCOL") != "1" or exit_gate.mode() != "enforce":
+        return None
+    text = _transcript_last_assistant_text(transcript_path)
+    if not text:
+        return None
+    sentinel = classifier.parse_worker_sentinel(text)
+    if sentinel in (classifier.BLOCK_SENTINEL, classifier.CLAIM_ERROR_SENTINEL):
+        return None
+    if not done and _ticket_status(ticket_id) != "claimed":
+        return None
+    decision = exit_gate.decide({
+        "ticket_done": done,
+        "closed_sentinel": sentinel == classifier.TICKET_CLOSED_SENTINEL,
+        "landed_commit": _branch_has_commits(worktree),
+    }, exit_gate.parse_exit_signal(text))
+    if decision.exit:
+        return None
+    n = _bump_blocks(os.environ.get(STATE_ENV), hook_input.get("session_id"))
+    if n > MAX_BLOCKS:
+        return None
+    msg = f"STOP BLOCKED ({n}/{MAX_BLOCKS}) — " + exit_gate.nudge_text(decision, ticket_id)
+    if n == MAX_BLOCKS:
+        msg += ("\nThis is the last block — the next stop is allowed and the harness "
+                "will judge the exit as it stands.")
+    return BLOCK, msg
 
 
 def _acceptance_gap_message(n, worktree, missing, acc):
