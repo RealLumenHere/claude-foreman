@@ -207,7 +207,18 @@ nodes:                  # CLASS 6
        is a live, always-on fleet node (Miniflux/PG17 news pipeline), held to the same bar
        rt-ax86u and neith were -- one unexplained outage with no ignore/sleepers-qualifying
        fact behind it stays a real page, not nodes.ignore/sleepers. This note just carries
-       the context so the next page on sia doesn't re-derive it."
+       the context so the next page on sia doesn't re-derive it.
+       wq#4982 (2026-11-14 page, worked 2026-11-18): REPEAT, and now a known hardware-side
+       outage. sia came back at some point after the 10-20 outage (tailscale LastSeen
+       2026-11-14T01:20Z) and went dark again. lumen_state sia.status=DOWN, verified
+       2026-11-17 [conf 0.95]: tailscale offline ~4d, ping/ARP dead on .174 and .175
+       (sia.lan_ip=.175 since 2026-11-05), ssh timeout; the Station P1 KVM shows Magewell
+       No Signal and the USB gadget not attached, so the box is unpowered or uncabled. The
+       P8 smart-plug theory is moot (plugs removed 2026-11-05). The fix is a physical check
+       at the box, open as wq#4446 (frank-hw). Still not ignore/sleepers: sia is meant to
+       run, and a page while wq#4446 is open is expected. Next page on sia: if wq#4446 is
+       still open, point at it; if it is closed, the box died again after the repair and
+       needs a fresh look."
     khepri: "wq#4415/wq#4450 (2026-10-20): khepri is Mac Pro 6,1 hardware and got swept into
        a bad closure that cited the 2026-10-19 'Mac fleet retired' brief, but khepri is not
        in ORCHESTRATOR-HANDOFF.md section 3's actual retired list (isis/hathor/wadjet/
