@@ -517,9 +517,14 @@ class Manifest:
 SECURITY_NEVER_PREFIXES = ("claude-fable-",)
 SECURITY_FALLBACK_CHAIN = ("opus-4-6@high", "opus-5-5@high")
 SECURITY_DEFAULT_TAGS = ("RE", "miko", "exploit", "firmware", "security", "sec", "mtkclient",
-                         "edl", "flashrom", "ghidra", "reverse engineer")
+                         "edl", "flashrom", "ghidra", "mt8167", "avb", "bootloader",
+                         "questfree", "reverse engineer")
 # tags matched ONLY as a bracket tag / lane / subsystem token, never as a prose word
 _SECURITY_TOKEN_ONLY = {"sec"}
+# tags that must match a WHOLE word/token. Every other single-word tag is a PREFIX match
+# (wq#5083 follow-up: 'Miko3', 'MikoUnchained', 'exploits', 'firmwares' slipped a
+# whole-word match and left 3 open Miko tickets stamped Fable).
+_SECURITY_WHOLE_WORD = {"re", "sec", "edl"}
 _SEC_SPLIT_RE = re.compile(r"[-_,\s/:.]+")
 
 
@@ -541,7 +546,8 @@ def is_security_ticket(t, manifest=None):
     hits = []
     for tag in manifest.security["tags"]:
         low = tag.lower()
-        if " " not in low and low in tag_tokens:
+        if " " not in low and (low in tag_tokens or (
+                low not in _SECURITY_WHOLE_WORD and any(tok.startswith(low) for tok in tag_tokens))):
             hits.append(f"tag/lane/subsystem {tag}")
             continue
         if low in _SECURITY_TOKEN_ONLY:
@@ -550,8 +556,10 @@ def is_security_ticket(t, manifest=None):
             pat = re.compile(r"(?<![\w-])RE(?![\w-])")
         elif " " in low:  # phrase, prefix match ('reverse engineer' covers -ed/-ing)
             pat = re.compile(r"(?<!\w)" + r"[\s-]+".join(map(re.escape, low.split())), re.IGNORECASE)
-        else:
+        elif low in _SECURITY_WHOLE_WORD:
             pat = re.compile(r"(?<!\w)" + re.escape(low) + r"(?!\w)", re.IGNORECASE)
+        else:             # prefix match: Miko3, MikoUnchained, exploits, firmwares
+            pat = re.compile(r"(?<!\w)" + re.escape(low), re.IGNORECASE)
         if pat.search(title):
             hits.append(f"title word {tag}")
         elif pat.search(detail):

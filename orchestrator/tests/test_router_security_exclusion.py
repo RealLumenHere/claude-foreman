@@ -45,6 +45,11 @@ def T(title, detail="", lane="", subsystems=""):
     T("design the new protocol shim", "we reverse-engineered the wire format"),
     T("add security headers to the gateway"),
     T("P1 PILOT: Ghidra MCP (bethington, 219 tools)"),
+    T("Miko3: USB debugging disables on reboot"),
+    T("MikoUnchained: custom ROM feasibility"),
+    T("MT8167 AVB green/locked to orange/unlocked"),
+    T("[miko3] uart"),
+    T("unlock the bootloader on the tablet"),
 ])
 def test_security_tickets_detected(m, ticket):
     assert router.is_security_ticket(ticket, m), ticket
@@ -56,6 +61,9 @@ def test_security_tickets_detected(m, ticket):
     T("design lumen-memoryd new service"),
     T("add conflict guard to lumen-pr"),
     T("secret rotation runbook", lane="fleet"),   # 'sec' is token-only, never a prose prefix
+    T("tidy", lane="secrets"),                       # ... and whole-token, not a token prefix
+    T("edlin clone for the shell"),                  # 'edl' is whole-word
+    T("prefer the reliable path"),                   # 'RE' never matches inside words
 ])
 def test_non_security_tickets_not_flagged(m, ticket):
     assert router.is_security_ticket(ticket, m) == [], ticket

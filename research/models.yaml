@@ -480,7 +480,7 @@ security_exclusion:
   never_model_prefixes: [claude-fable-]
   chain: [opus-4-6@high, opus-5-5@high]
   exempt_archetypes: [long-horizon-campaign]   # DECOMPOSE has no model; each sub-ticket is routed on its own
-  tags: [RE, miko, exploit, firmware, security, sec, mtkclient, edl, flashrom, ghidra, reverse engineer]   # a phrase tag prefix-matches (engineer/-ed/-ing)
+  tags: [RE, miko, exploit, firmware, security, sec, mtkclient, edl, flashrom, ghidra, mt8167, avb, bootloader, questfree, reverse engineer]   # single words PREFIX-match (Miko3, exploits) except RE/sec/edl; a phrase prefix-matches too
 
 # ── refusal-fallback routing (decompiled from 2.1.220, SRC FQt) ──
 # When a model refuses (stop_reason "refusal"), CC silently retries the turn on:
