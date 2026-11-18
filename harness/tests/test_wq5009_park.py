@@ -125,6 +125,7 @@ def q(tmp_path, monkeypatch):
     monkeypatch.setattr(park, "RUNS_ROOT", runs)
     monkeypatch.setattr(park, "NTFY_BIN", str(ntfy))
     monkeypatch.setattr(park, "WQ_BIN", WQ_BIN)
+    monkeypatch.setattr(park, "CORD_BIN", "/bin/false")     # never file real Cord drops
 
     class Q:
         runs_root, notice_log = runs, notices
@@ -150,6 +151,19 @@ def parked(q, tid=None, ask=ASK, sid="sess-abc"):
     tid = tid or q.add_claimed()
     rec = park.park_round(tid, sid, "/wt/x", 1, park.validate_ask(ask))
     return tid, rec
+
+
+def test_cord_drop_answers_the_card(q, tmp_path, monkeypatch):
+    """wq#5005: the card also files a Cord drop; a filled drop is routed as the answer."""
+    cord = tmp_path / "cord"
+    cord.write_text('#!/bin/sh\nif [ "$1" = request ]; then echo drop1; '
+                    'else printf "after freeze"; fi\n')
+    cord.chmod(0o755)
+    monkeypatch.setattr(park, "CORD_BIN", str(cord))
+    tid, rec = parked(q)
+    assert rec["cord_id"] == "drop1"
+    assert park.sweep_one(tid) == "answered"
+    assert park.load(tid)["card"]["choice"] == "after freeze"
 
 
 def test_park_moves_the_ticket_and_posts_the_card(q):

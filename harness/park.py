@@ -40,7 +40,9 @@ RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_run
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 NTFY_BIN = os.environ.get("FOREMAN_NTFY_BIN", "/home/lumen/bin/ntfy-send")
 DISPATCH_BATCH_BIN = os.environ.get("FOREMAN_DISPATCH_BATCH_BIN", "/home/lumen/bin/dispatch-batch")
-MODE_ENV = "FOREMAN_PARK"                 # on (default) | off
+CORD_BIN = os.environ.get("FOREMAN_CORD_BIN", "/home/lumen/bin/cord")
+CORD_TTL_MIN = int(os.environ.get("FOREMAN_PARK_CORD_TTL_MIN", str(24 * 60)))
+MODE_ENV = "FOREMAN_PARK"                # on (default) | off
 PARK_FILENAME = "park.json"
 FENCE = "foreman-park"
 PARKED_SENTINEL = "PARKED"
@@ -278,6 +280,31 @@ def _notify(title, body, priority=None):
         return False
 
 
+def _cord(*args, timeout=30):
+    try:
+        return subprocess.run([CORD_BIN, *args], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _cord_request(card, ticket_id):
+    """wq#5005: file a Cord drop so Frank can answer the card from his phone. Returns the
+    drop id or None. The drop is filed with --wait 0 and read later by _cord_poll."""
+    note = card["text"][:400] + "".join(f"\n{i}. {o}" for i, o in enumerate(card["options"], 1))
+    p = _cord("request", f"wq#{ticket_id} decision: {card['title'][:60]}", "--note", note,
+              "--as", "park", "--ttl", str(CORD_TTL_MIN), "--wait", "0")
+    drop = (p.stdout.strip() if p and p.returncode == 0 else "")
+    return drop or None
+
+
+def _cord_poll(drop_id):
+    """Answer text once Frank has filled the drop, else None. 1s await: a timeout exits
+    non-zero, a filled drop prints the value (burn-on-read, so the caller must use it)."""
+    p = _cord("await", drop_id, "--wait", "1", timeout=30)
+    value = p.stdout.strip() if p and p.returncode == 0 else ""
+    return value or None
+
+
 def _card_notice(card, ticket_id):
     body = card["text"][:600]
     if card["options"]:
@@ -349,6 +376,10 @@ def park_round(ticket_id, session_id, worktree, attempt, ask, runs_root=None, no
 def deliver(ticket_id, rec, runs_root=None, now=None):
     now = time.time() if now is None else now
     title, body = _card_notice(rec["card"], ticket_id)
+    if not rec.get("cord_id"):
+        rec["cord_id"] = _cord_request(rec["card"], ticket_id)
+    if rec.get("cord_id"):
+        body += "\nOr answer in Cord (phone): fill the drop for this card."
     if _notify(title, body, priority="high"):
         if not rec.get("delivered_at"):
             rec["delivered_at"] = now
@@ -401,6 +432,11 @@ def sweep_one(ticket_id, runs_root=None, now=None, dry_run=False, log=lambda m: 
     if status in ("pending_review", "frank_gated"):
         if dry_run:
             return "waiting"
+        if rec.get("cord_id") and not answer and status == "pending_review":
+            cord_answer = _cord_poll(rec["cord_id"])
+            if cord_answer:
+                _wq("answer", ticket_id, cord_answer)
+                return sweep_one(ticket_id, runs_root, now, dry_run, log)
         if status == "frank_gated":
             # the card never reached pending_review (decide failed) or a review rejected
             # the answer: (re)post it so Frank has a live question again
