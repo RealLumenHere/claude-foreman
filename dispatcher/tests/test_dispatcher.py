@@ -128,6 +128,7 @@ def denv(tmp_path, monkeypatch):
     monkeypatch.setattr(fd, "APPROVALS_DIR", str(approvals))
     monkeypatch.setattr(fd, "DISARM_PATH", str(tmp_path / "DISARM"))
     monkeypatch.setattr(fd, "STOP_PATH", str(tmp_path / "STOP"))
+    monkeypatch.setattr(fd, "SUPERSEDED_PATH", str(tmp_path / "BROKER_SUPERSEDED"))  # wq#5084: never the live marker
     monkeypatch.setattr(fd, "GOVERNOR_CLI", FAKE_GOVERNOR)
     monkeypatch.setattr(fd, "GOVERNOR_STATE", str(gov_state))
     monkeypatch.setattr(fd, "NTFY_BIN", fake_ntfy)
@@ -339,6 +340,18 @@ def test_disarm_at_start(denv):
     evs = log_events(denv)
     assert len(evs) == 1 and evs[0]["event"] == "halt" and evs[0]["stage"] == "kill_switch"
     assert "DISPATCH_DISARM" in evs[0]["reason"]
+    assert lumen_calls(denv) == []
+
+
+def test_superseded_marker_halts(denv, monkeypatch):
+    """wq#5084: once auto-dispatch replaces this broker, a directly-started pass
+    (refill kick, dispatch_recover, wake_judge) must halt at stage 0."""
+    add_ticket("eligible but broker superseded")
+    (denv["tmp"] / "BROKER_SUPERSEDED").write_text("")
+    assert fd.run_pass() == 0
+    evs = log_events(denv)
+    assert len(evs) == 1 and evs[0]["stage"] == "kill_switch"
+    assert "superseded" in evs[0]["reason"]
     assert lumen_calls(denv) == []
 
 
@@ -1675,6 +1688,7 @@ def test_once_pass_exits(denv):
         "FOREMAN_APPROVALS_DIR": str(denv["approvals"]),
         "FOREMAN_DISPATCH_DISARM": str(tmp / "DISARM"),
         "FOREMAN_STOP_FILE": str(tmp / "STOP"),
+        "FOREMAN_BROKER_SUPERSEDED": str(tmp / "BROKER_SUPERSEDED"),
         "FOREMAN_SLOCK_BIN": SLOCK_BIN,
         "FOREMAN_NTFY_BIN": str(denv["bin_dir"] / "fake-ntfy"),
         "FOREMAN_LUMEN_RUN_BIN": denv["lumen_run"],

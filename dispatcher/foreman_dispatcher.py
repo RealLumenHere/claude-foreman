@@ -108,6 +108,12 @@ APPROVALS_DIR = os.environ.get("FOREMAN_APPROVALS_DIR",
 DISARM_PATH = os.environ.get("FOREMAN_DISPATCH_DISARM",
                              "/home/lumen/autonomy/DISPATCH_DISARM")
 STOP_PATH = os.environ.get("FOREMAN_STOP_FILE", os.path.join(FOREMAN_ROOT, "STOP"))
+# wq#5084: present once bin/auto-dispatch has replaced this broker. Disabling
+# lumen-foreman-dispatch.timer is not enough: fworker.trigger_refill(), dispatch_recover and
+# wake_judge start lumen-foreman-dispatch.service directly. On 2026-11-18 the refill kicks ran
+# this broker over every lane while auto-dispatch was set to research only.
+SUPERSEDED_PATH = os.environ.get("FOREMAN_BROKER_SUPERSEDED",
+                                 os.path.join(FOREMAN_ROOT, "BROKER_SUPERSEDED"))
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 RUNS_ROOT = os.environ.get("FOREMAN_RUNS_ROOT", os.path.join(FOREMAN_ROOT, "_runs"))
 SLOCK_BIN = os.environ.get("FOREMAN_SLOCK_BIN", "/home/lumen/bin/slock")
@@ -465,6 +471,8 @@ def kill_switch():
         return f"DISPATCH_DISARM present ({DISARM_PATH})"
     if os.path.exists(STOP_PATH):
         return f"foreman STOP present ({STOP_PATH})"
+    if os.path.exists(SUPERSEDED_PATH):
+        return f"broker superseded by auto-dispatch ({SUPERSEDED_PATH})"
     return None
 
 

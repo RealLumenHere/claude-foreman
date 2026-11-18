@@ -93,3 +93,29 @@ def test_nonzero_kick_is_swallowed(monkeypatch):
     monkeypatch.setattr(fworker.subprocess, "run",
                         lambda *a, **k: _Done(1, stderr="denied"))
     fworker.trigger_refill(992, "done")
+
+
+def test_superseded_broker_kicks_auto_dispatch(monkeypatch):
+    """wq#5084: with BROKER_SUPERSEDED present the kick starts lumen-auto-dispatch.service,
+    never the retired foreman broker (2026-11-18: refill kicks ran it over every lane)."""
+    captured = {}
+    monkeypatch.delenv("FOREMAN_NO_REFILL", raising=False)
+    monkeypatch.setattr(fworker.os.path, "exists",
+                        lambda p: p == fworker.BROKER_SUPERSEDED_PATH)
+    monkeypatch.setattr(fworker.subprocess, "run",
+                        lambda cmd, **k: captured.setdefault("cmd", cmd) and _Done(0))
+    fworker.trigger_refill(5084, "done")
+    joined = " ".join(captured["cmd"])
+    assert f"systemctl start --no-block {fworker.AUTO_DISPATCH_SERVICE}" in joined
+    assert fworker.DISPATCH_SERVICE not in joined
+
+
+def test_superseded_still_honors_disarm(monkeypatch):
+    calls = []
+    monkeypatch.delenv("FOREMAN_NO_REFILL", raising=False)
+    monkeypatch.setattr(fworker.os.path, "exists",
+                        lambda p: p in (fworker.BROKER_SUPERSEDED_PATH, fworker.DISPATCH_DISARM_PATH))
+    monkeypatch.setattr(fworker.subprocess, "run",
+                        lambda *a, **k: calls.append(a) or _Done())
+    fworker.trigger_refill(5084, "done")
+    assert calls == []

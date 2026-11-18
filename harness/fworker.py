@@ -474,6 +474,13 @@ DISPATCH_DISARM_PATH = os.environ.get("FOREMAN_DISPATCH_DISARM",
 # kicked pass counts running slots (else its still-deactivating unit masks the slot it
 # just freed). Small: 3s is negligible against the 20-min gap it replaces.
 REFILL_SETTLE_S = _envint("FOREMAN_REFILL_SETTLE_S", 3)
+# wq#5084: once bin/auto-dispatch has replaced the foreman broker (marker below present),
+# the refill kick starts that service instead, so a freed slot refills under auto-dispatch's
+# lane, halt-file and budget config rather than the retired broker's.
+BROKER_SUPERSEDED_PATH = os.environ.get("FOREMAN_BROKER_SUPERSEDED",
+                                        os.path.join(FOREMAN_ROOT, "BROKER_SUPERSEDED"))
+AUTO_DISPATCH_SERVICE = os.environ.get("FOREMAN_AUTO_DISPATCH_SERVICE",
+                                       "lumen-auto-dispatch.service")
 # wq#992-C: once the ticket itself reads done, no more real work is coming. Poll the
 # ticket on this cadence inside run_child; after POST_DONE_GRACE_S more with the child
 # still alive, force it — this is the "agent ran wq done but keeps taking agentic turns
@@ -5973,17 +5980,19 @@ def trigger_refill(ticket_id, outcome):
                 f"after wq#{ticket_id}")
             return
     settle = max(0, REFILL_SETTLE_S)
+    service = (AUTO_DISPATCH_SERVICE if os.path.exists(BROKER_SUPERSEDED_PATH)
+               else DISPATCH_SERVICE)
     unit = f"fdisp-kick-wq{ticket_id}-{int(time.time())}"
     cmd = ["sudo", "-n", "systemd-run", "--collect", f"--unit={unit}",
            "/bin/sh", "-c",
-           f"sleep {settle}; exec systemctl start --no-block {DISPATCH_SERVICE}"]
+           f"sleep {settle}; exec systemctl start --no-block {service}"]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"refill: kick failed to launch after wq#{ticket_id}: {e}")
         return
     if p.returncode == 0:
-        log(f"refill: wq#{ticket_id} {outcome} -> kicked {DISPATCH_SERVICE} "
+        log(f"refill: wq#{ticket_id} {outcome} -> kicked {service} "
             f"in ~{settle}s ({unit})")
     else:
         log(f"refill: kick after wq#{ticket_id} failed rc={p.returncode}: "
