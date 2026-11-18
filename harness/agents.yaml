@@ -116,6 +116,7 @@ archetypes:
       - /home/lumen/agent
       - /home/lumen/logs
       - /home/lumen/minerva
+      - /home/lumen/scratch/research   # wq#5084: wq#4854/4862 died on `ls /home/lumen/scratch/research` blocked_path (11-05 breaker trip)
     # wq#4716: wq#4183 (CFP dates) was killed with no route to live web data. Workers get
     # web access through Bash, not the CLI's WebSearch/WebFetch tools. Decision: do NOT
     # grant those tools, even to this archetype. WebFetch runs every page through a model
@@ -124,7 +125,7 @@ archetypes:
     # engine fallback chain. fleet-search/curl already have Bash grants
     # (worker-settings.json), so this is a prompt change, not an allowlist change.
     # Revisit only if search quality, not access, turns out to be the bottleneck.
-    prompt_addendum: |
+    prompt_addendum: &web_recipe |
       WEB RESEARCH RECIPE (research-synthesis, wq#4716). You have no WebSearch/WebFetch
       tool and must not ask for one. Live web data comes through Bash:
       1. Search: `/home/lumen/bin/fleet-search web "<short query>"` (JSON: results[].url,
@@ -152,6 +153,22 @@ archetypes:
     primary_tuple: fable-5@high
     max_turns: 600
     wall_clock_timeout_s: 3600
+    # wq#5084: research-lane tickets routed here (wq#4860/4861/4863, 2026-11-05) got no web
+    # recipe, reached for WebFetch, were killed needs-web, and tripped the dispatch breaker
+    # (7/8 failed). Same reach + recipe as research-synthesis.
+    add_dirs:
+      - /home/lumen/agents/work-queue
+      - /home/lumen/mailbot
+      - /home/lumen/pokemon
+      - /home/lumen/bin
+      - /home/lumen/foreman
+      - /home/lumen/kb
+      - /home/lumen/projects/nest
+      - /home/lumen/agent
+      - /home/lumen/logs
+      - /home/lumen/minerva
+      - /home/lumen/scratch/research
+    prompt_addendum: *web_recipe
 
   rca-investigation:
     primary_tuple: opus-5-5@high   # Opus 5.5 adoption (f6f13598)
