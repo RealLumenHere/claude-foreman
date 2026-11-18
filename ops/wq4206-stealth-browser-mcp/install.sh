@@ -25,6 +25,7 @@ UV=/home/lumen/.local/bin/uv
 PY312=/home/lumen/.local/bin/python3.12
 LAUNCHER="$DEST/lumen_stealth_mcp.py"
 VPY="$DEST/venv/bin/python"
+GUARDED=/home/lumen/.local/share/mcp/stealth-browser/launch.sh
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
@@ -46,9 +47,10 @@ if [ "${1:-}" = --verify ]; then
   fi
   reg=$("$CLAUDE" mcp get "$NAME" 2>/dev/null || true)
   case "$reg" in
-    *"$LAUNCHER"*--minimal*) ;;
-    *) _vmiss "claude user-scope MCP '$NAME' not registered to $LAUNCHER --minimal" ;;
+    *"$GUARDED"*) ;;
+    *) _vmiss "claude user-scope MCP '$NAME' not registered to the guarded launcher $GUARDED (wq#4888)" ;;
   esac
+  grep -qF "$LAUNCHER --minimal" "$GUARDED" 2>/dev/null || _vmiss "$GUARDED does not run $LAUNCHER --minimal"
   vdone
 fi
 
@@ -75,8 +77,8 @@ chrome=$("$VPY" -I "$LAUNCHER" --print-browser)
 "$VPY" -I - "$DEST" "$REPO" "$PIN" "$PLAYWRIGHT" "$chrome" "$("$chrome" --version)" \
   "$(VIRTUAL_ENV="$DEST/venv" "$UV" pip freeze --python "$VPY")" < "$SRC/write_provenance.py"
 
-"$CLAUDE" mcp remove -s user "$NAME" >/dev/null 2>&1 || true
-"$CLAUDE" mcp add-json -s user "$NAME" \
-  "{\"type\":\"stdio\",\"command\":\"$VPY\",\"args\":[\"-I\",\"$LAUNCHER\",\"--minimal\"],\"env\":{}}"
+# Registration goes through lumen_mcp_guard (wq#4888): the shared installer writes $GUARDED, which
+# runs $LAUNCHER --minimal behind the guard's allowlist, and registers it.
+bash "$SRC/../wq4514-mcp-install-batch/install.sh" stealth_browser
 
 exec "$0" --verify

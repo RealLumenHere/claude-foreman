@@ -1,6 +1,6 @@
 # wq#4514-4518, wq#4552: MCP servers for Claude Code on Lumen
 
-Six stdio MCP servers, user scope, no root, no services, no ports. `install.sh` installs and
+Eight stdio MCP servers, user scope, no root, no services, no ports. `install.sh` installs and
 `install.sh --verify` checks (wq#1696 contract: read-only, exit 0 only if everything matches).
 
 | MCP name | wq | Server (pinned) | Exposed | Identity / secret file |
@@ -11,6 +11,8 @@ Six stdio MCP servers, user scope, no root, no services, no ports. `install.sh` 
 | `grafana` | 4518 | mcp-grafana 2.0.2 (release tarball, sha256) | 19 read-only tools, output masked | Bes Grafana anonymous Viewer; optional `.secrets/grafana-mcp.token` |
 | `playwright` | 4517 | @playwright/mcp 0.0.83 (npm lockfile) | 19 browser tools, egress forced public-only | none |
 | `fleet-state` | 4552 | @bytebase/dbhub 1.5.0 (second registration, same install as `fleet-memory`) | `execute_sql`, `search_objects` | sqlite file read permission only — no DB role exists for sqlite; read-only is enforced by `fleet-state.toml`'s `[[tools]] readonly=true`, not a secret |
+| `stealth-browser` | 4888 | wraps the wq#4206 install (`stealth-browser-mcp/ba95cca933c8`), nothing downloaded here | 19 of 21: no `execute_script`, no `file_upload`, sandbox cannot be turned off | none |
+| `council` | 4888 | wraps `/home/lumen/council` (own repo), nothing downloaded here | all 5; `ask_deepseek` model only `flash`/`pro` | LiteLLM master key, agy and codex logins, read by council itself |
 
 Everything lives under `/home/lumen/.local/share/mcp/`. `_guard/` holds `lumen_mcp_guard.py`, the
 pinned fastmcp venv, and the wq#4206 egress proxy. Each server has `<tool>/<version>/launch.sh`,
@@ -22,7 +24,9 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
 (web pages, container logs) is untrusted text that lands in agent context (prompt injection).
 `lumen_mcp_guard.py` is therefore fail closed:
 - only tools on `--allow` are listed or callable (new upstream tools stay hidden until reviewed);
-- `--arg-allow TOOL:ARG=v1|v2` closes multiplexed tools to reviewed methods (no PR merge, no review dismiss);
+- `--arg-allow TOOL:ARG=v1|v2` closes multiplexed tools to reviewed methods (no PR merge, no review dismiss).
+  `TOOL:ARG?=v1|v2` (wq#4888) also allows the argument to be absent: an optional override whose default is
+  safe (council `ask_deepseek:model?=flash|pro`, stealth `spawn_browser:sandbox?=True|true`);
 - `--path-arg TOOL:ARG=/root` pins a host-path argument under a root after resolving symlinks. Used by ghidra-lumen, `ops/wq4946-ghidra-mcp-guard`;
 - `--http-url-arg` pins URL arguments to http(s); `--egress-proxy` forces the browser through the public-only proxy;
 - `--mask-output` runs results through `mask-secrets`, withholding the result if masking fails. Since
@@ -39,7 +43,7 @@ servers can mutate Gitea, run containers, read the fleet DB or open arbitrary UR
   (anthropics/claude-code#55677), which would bypass the wrapper. Instruction-like text gets a `SUSPECT`
   audit row that names the pattern but never quotes the text. This is a marker, not a filter: it lowers
   the odds that injected text is obeyed but does not rule it out, so the allowlists stay the real
-  boundary. Used on gitea, docker, grafana and playwright. The dbhub launchers read our own DBs and are
+  boundary. Used on gitea, docker, grafana, playwright, stealth-browser and council. The dbhub launchers read our own DBs and are
   not wrapped. ghidra-lumen is not wrapped either, because stripping outputSchema would change the
   definitions its `--pins` were taken over. **Pins:** with the flag, a tool is judged on the definition
   the agent sees, without outputSchema. Re-snapshot `<name>@guarded` after deploy before adding `--pins`
@@ -104,12 +108,15 @@ Rollback: `claude mcp remove -s user fleet-state`; no role/secret to revoke.
 ## Install, verify, test
 ```
 cd <worktree or foreman checkout>/ops/wq4514-mcp-install-batch
-bash ./install.sh [gitea|postgres|docker|grafana|playwright|fleet_state ...]   # default all; ends with --verify
+bash ./install.sh [gitea|postgres|docker|grafana|playwright|fleet_state|stealth_browser|council ...]   # default all; ends with --verify
 bash ./install.sh --verify
 /home/lumen/.local/share/mcp/_guard/venv/bin/python -m pytest -q test_lumen_mcp_guard.py
-for t in gitea postgres docker grafana playwright fleet_state; do /home/lumen/.local/share/mcp/_guard/venv/bin/python -I smoke_$t.py; done
+for t in gitea postgres docker grafana playwright fleet_state stealth_browser council; do /home/lumen/.local/share/mcp/_guard/venv/bin/python -I smoke_$t.py; done
 ```
-`smoke_gitea.py` creates and closes one test issue per run unless `--skip-issue`. `--verify` makes a real
+`smoke_gitea.py` creates and closes one test issue per run unless `--skip-issue`. `smoke_council.py` makes one
+real `ask_deepseek` call (a few tokens via LiteLLM) unless `--no-spend`. `smoke_stealth_browser.py` opens
+example.com in a headless Chrome and closes it. Both take a launcher argv (default: the installed launch.sh);
+pointed at the raw backend they must FAIL, which is the falsification run. `--verify` makes a real
 read-only `tools/call` per server (a `tools/list` alone passed on a broken proxy during development).
 Rollback of one server: `claude mcp remove -s user <name>`; backup of `~/.claude.json` before registering is in `~/backups/claude.json.pre-wq4514.*`.
 
@@ -138,3 +145,25 @@ With `--pins` wired, a new allowlisted tool or a reviewed upstream upgrade also 
 - **postgres-mcp (crystaldba) is not used:** 0.3.0 hard-pins `pglast==7.2.0`, gone from PyPI (verified 2026-10-23).
   Do NOT `pip install dbhub`: that PyPI name is an unrelated 2022 package.
 - Versions were chosen at least 14 days old; bump deliberately (new pin, new hashes/lock, re-run smoke).
+- **council** uses the LiteLLM master key, so the guard pin on `ask_deepseek` model is the only thing between an
+  agent and `anthropic/*` on the gateway. A council-only virtual key limited to the two DeepSeek models would make
+  that hold at the gateway too. Prompts and diffs still leave the fleet to DeepSeek/Google/OpenAI: the guard masks
+  results, not what the agent sends.
+
+## Coverage audit (wq#4888, 2026-11-18)
+The 2026-11-05 acquisition audit listed six user-scope servers as unguarded. Re-checked on Lumen with
+`lumen_mcp_guard.py --list-backend` against each live backend: docker, playwright, gitea and grafana were already
+behind the guard (wq#4514-4518, 2026-10-23); stealth-browser and council were not. Every allowlisted tool exists
+upstream on all eight (`missing_upstream: []`).
+
+| Server | Backend tools | Exposed | Hidden (stateful/destructive, not reviewed for agents) |
+|---|---|---|---|
+| docker | 19 | 5 read-only | build/create/pull/push/recreate/remove/run/start/stop: root-equivalent through the socket |
+| stealth-browser | 21 | 19: 7 read (list/get state/query/wait/page content/screenshot), 12 browser-local state (spawn/navigate/click/type...) | `execute_script` (page JS, wq#4218/wq#4290), `file_upload` (host file to web page) |
+| playwright | 25 | 19 | `browser_evaluate`, `browser_run_code_unsafe`, `browser_file_upload`, `browser_drop`, `browser_drag`, `browser_emulate_media` |
+| gitea | 57 | 30: reads plus issue/PR/review writes pinned by method | repo create/fork, branch/tag/release/file writes and deletes, Actions config/runs, packages, wiki/label/milestone/project writes, notifications, timetracking |
+| grafana | 22 (after `--disable-write`) | 19 read-only | `alerting_manage_routing`, `get_annotation_tags`, `list_dashboard_versions` |
+| council | 5 | 5 (none touch the host; `council_status` read-only, the rest send text to an outside model) | none; `ask_deepseek` model pinned to `flash`/`pro` |
+
+The guard limits which tools an agent sees and what arguments reach them. It is not a sandbox: the docker
+backend still holds the socket, the gitea token still has repo write. Least-privilege credentials stay necessary.

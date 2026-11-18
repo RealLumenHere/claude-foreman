@@ -393,8 +393,27 @@ def test_arg_allow_closes_a_multiplexed_tool_to_reviewed_values(env):
         assert out[bad] is True, bad
 
 
+def test_arg_allow_optional_admits_absence_but_still_pins_values(env):
+    """wq#4888: council ask_deepseek(model=) is optional; its default is safe, a free value reaches anthropic/*."""
+    cmd = guard_cmd(env[1], ["--arg-allow", "big:tail?=flash|pro"], allow="safe_read,big")
+
+    async def go(c):
+        out = {}
+        for m in ("flash", "pro", "anthropic/claude-x", "", "pro?"):
+            r = await c.call_tool("big", {"n": 1, "tail": m}, raise_on_error=False)
+            out[m] = r.is_error
+        r = await c.call_tool("big", {"n": 1}, raise_on_error=False)
+        out["<absent>"] = r.is_error
+        return out
+    out = with_client(env, cmd, go)
+    assert [out[m] for m in ("flash", "pro", "<absent>")] == [False, False, False]
+    for bad in ("anthropic/claude-x", "", "pro?"):
+        assert out[bad] is True, bad
+
+
 def test_arg_allow_malformed_spec_is_a_config_error(env):
-    for spec in ("pr_write", "pr_write:method", "pr_write:method=", ":method=a", "pr_write:=a"):
+    for spec in ("pr_write", "pr_write:method", "pr_write:method=", ":method=a", "pr_write:=a",
+                 "pr_write:?=a", "pr_write:method?="):
         p = subprocess.run(guard_cmd(env[1], ["--arg-allow", spec], allow="pr_write"), env=env[0],
                            capture_output=True, text=True, timeout=30)
         assert p.returncode != 0 and "--arg-allow wants" in p.stderr, spec

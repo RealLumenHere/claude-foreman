@@ -12,7 +12,9 @@ Code and the real server:
   * --http-url-arg TOOL:ARG pins an argument of a tool to http(s) URLs with a host;
   * --arg-allow TOOL:ARG=v1|v2 pins an argument to a closed set of values. An absent
     argument or any other value is refused. This is how a multiplexed tool such as
-    pull_request_write(method=...) is cut down to the methods someone reviewed;
+    pull_request_write(method=...) is cut down to the methods someone reviewed.
+    TOOL:ARG?=v1|v2 also lets the argument be left out, for an optional override whose
+    default is safe and whose free-form value is not (council ask_deepseek model=, wq#4888);
   * --path-arg TOOL:ARG=ROOT pins a host-path argument under ROOT: it must be absolute and its
     realpath (symlinks resolved) must be ROOT or below it. Absent or empty is refused (wq#4946,
     ghidra-lumen load_program/import_file/open_project);
@@ -102,14 +104,17 @@ def parse_url_args(specs):
 
 
 def parse_arg_allow(specs):
+    """{tool: {arg: (values, optional)}}; ARG? marks an argument that may be left out."""
     out = {}
     for spec in specs:
         left, eq, values = spec.partition("=")
         tool, colon, arg = left.partition(":")
+        optional = arg.endswith("?")
+        arg = arg.removesuffix("?")
         vals = {v for v in values.split("|") if v}
         if not (eq and colon and tool and arg and vals):
-            raise SystemExit(f"--arg-allow wants TOOL:ARG=v1|v2, got {spec!r}")
-        out.setdefault(tool, {})[arg] = vals
+            raise SystemExit(f"--arg-allow wants TOOL:ARG=v1|v2 or TOOL:ARG?=v1|v2, got {spec!r}")
+        out.setdefault(tool, {})[arg] = (vals, optional)
     return out
 
 
@@ -394,8 +399,10 @@ def make_policy(allow, url_args, arg_allow, audit, lookup, mask_cmd=None, pins=N
                     except PolicyError as exc:
                         audit(name, "DENY", f"{arg}: {exc}", arguments)
                         raise ToolError(f"{name}: argument {arg!r}: {exc}") from None
-            for arg, allowed in sorted(arg_allow.get(name, {}).items()):
+            for arg, (allowed, optional) in sorted(arg_allow.get(name, {}).items()):
                 value = arguments.get(arg)
+                if value is None and optional:
+                    continue
                 if value is None or str(value) not in allowed:
                     audit(name, "DENY", f"{arg}: value not in reviewed set", arguments)
                     raise ToolError(f"{name}: {arg}={str(value)[:40]!r} is not permitted; allowed: {sorted(allowed)}")

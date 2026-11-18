@@ -14,7 +14,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 INSTALL_SH = Path(os.environ.get("INSTALL_SH", HERE / "install.sh"))
 MASKER = "/home/lumen/bin/mask-secrets"
-LAUNCHERS = ["gitea", "postgres", "fleet_state", "docker", "grafana", "playwright"]
+LAUNCHERS = ["gitea", "postgres", "fleet_state", "docker", "grafana", "playwright", "stealth_browser", "council"]
 
 
 def emit(name):
@@ -48,13 +48,25 @@ class LauncherMasking(unittest.TestCase):
 
     def test_every_launcher_caps_results_and_third_party_ones_are_marked_untrusted(self):
         """wq#4942 (audit F2): G11 size cap on all, G10 untrusted wrapper on servers returning third-party text."""
-        untrusted = {"gitea", "docker", "grafana", "playwright"}
+        untrusted = {"gitea", "docker", "grafana", "playwright", "stealth_browser", "council"}
         for name in LAUNCHERS:
             with self.subTest(launcher=name):
                 argv = guard_argv(emit(name))
                 self.assertIn("--max-result-bytes", argv, f"{name}: guard runs without a result size cap")
                 self.assertEqual(argv[argv.index("--max-result-bytes") + 1], "524288")
                 self.assertEqual("--untrusted-output" in argv, name in untrusted, name)
+
+    def test_wq4888_launchers_hide_code_and_file_tools_and_pin_spend_and_sandbox(self):
+        stealth = guard_argv(emit("stealth_browser"))
+        allow = set(stealth[stealth.index("--allow") + 1].split(","))
+        self.assertEqual(len(allow), 19)
+        self.assertFalse({"execute_script", "file_upload"} & allow)
+        self.assertIn("spawn_browser:sandbox?=True|true", stealth)
+        self.assertIn("navigate:url", stealth)
+        council = guard_argv(emit("council"))
+        self.assertIn("ask_deepseek:model?=flash|pro", council)
+        self.assertTrue(emit("stealth_browser").rstrip().endswith("lumen_stealth_mcp.py --minimal"))
+        self.assertTrue(emit("council").rstrip().endswith("/usr/bin/node /home/lumen/council/src/server.js"))
 
     def test_launchers_parse(self):
         for name in LAUNCHERS:
