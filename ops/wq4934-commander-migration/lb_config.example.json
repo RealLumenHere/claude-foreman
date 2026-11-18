@@ -1,0 +1,19 @@
+{
+  "account_id": "REPLACE_WITH_CLOUDFLARE_ACCOUNT_ID",
+  "zone_id": "REPLACE_WITH_LUMENNODE_UK_ZONE_ID",
+  "lb_hostname": "mcp-backend.lumennode.uk",
+  "health_path": "/health",
+  "interval_s": 60,
+  "pools": [
+    {
+      "name": "commander-lumen",
+      "endpoint_name": "lumen",
+      "tunnel_id": "REPLACE_WITH_LUMEN_TUNNEL_UUID"
+    },
+    {
+      "name": "commander-seneca",
+      "endpoint_name": "seneca",
+      "tunnel_id": "REPLACE_WITH_NEW_SENECA_TUNNEL_UUID"
+    }
+  ]
+}

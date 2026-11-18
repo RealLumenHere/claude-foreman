@@ -1,0 +1,17 @@
+# cloudflared config for Seneca's OWN tunnel (wq#4934, Phase B step B2).
+# Not the old mcp-horus replica config: a second connector of Lumen's tunnel cannot be
+# a load balancer pool (README, "Design").
+#
+# Replace both placeholders with the UUID that `cloudflared tunnel create mcp-seneca`
+# prints, and credentials-file with the path it prints.
+# Do NOT run `cloudflared tunnel route dns` for this tunnel: the existing CNAME for
+# mcp-backend.lumennode.uk must keep pointing at Lumen's tunnel. It is the rollback path.
+tunnel: REPLACE_WITH_NEW_SENECA_TUNNEL_UUID
+credentials-file: /etc/cloudflared/REPLACE_WITH_NEW_SENECA_TUNNEL_UUID.json
+
+ingress:
+  # Same hostname as Lumen's ingress, because the load balancer sends that Host header
+  # to both pools. The service is Seneca's local gateway, not a relay to Lumen.
+  - hostname: mcp-backend.lumennode.uk
+    service: http://localhost:3100
+  - service: http_status:404
