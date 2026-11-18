@@ -20,7 +20,8 @@ billing-down for `disable_after_s` (600):
   * one rotation (or top-up) ticket + aq row + page. A rotation ticket files in the
     human lane frank-cred: the wq#3747 gate refuses rotate-provider-keys to headless
     workers, so a build-lane ticket only ever dispatched a worker that had to block
-    (wq#4782..wq#4936).
+    (wq#4782..wq#4937). A top-up ticket files in frank-funding for the same reason:
+    only Frank can pay a provider.
 
 When the host answers again our cooldown entries are removed (only ours) and the
 ticket episode closes. If EVERY probed host is auth-down the problem is our own
@@ -264,6 +265,7 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                                f"{host} (physical task; funding tracked in wq#3557). "
                                f"fleet-selfheal re-enables the rungs on the first good "
                                f"probe.",
+                               lane=p.get("billing_ticket_lane", "frank-funding"),
                                page="high")
         elif verdict == "quota":
             hits = [t for t in hs.get("quota_hits", []) if ctx.now - t < QUOTA_HIT_WINDOW_S]

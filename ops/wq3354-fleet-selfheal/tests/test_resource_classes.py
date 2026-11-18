@@ -152,6 +152,22 @@ def test_provider_auth_ticket_goes_to_the_human_lane_with_the_operator_steps(
     assert "vault_rotation_backup.py rotate-provider-keys" in t["detail"]
 
 
+def test_provider_ticket_lanes_are_ones_the_dispatcher_never_hands_a_worker(
+        make_ctx, tmp_path):
+    src = os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                       "dispatcher", "foreman_dispatcher.py")
+    with open(src) as f:
+        line = next(l for l in f if l.startswith("HUMAN_LANES = "))
+    cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_401, "api.z.ai": PROVIDER_402}
+    _psweep(make_ctx(cfg, state, now=t0), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _psweep(ctx, bad)
+    assert len(ctx.out.tickets) == 2
+    for t in ctx.out.tickets:
+        assert f'"{t["lane"]}"' in line, t["title"]
+
+
 def test_a_flapping_auth_host_reuses_its_open_ticket_across_episodes(make_ctx, tmp_path):
     """gemini went 403 -> 429 -> 200 -> 403 for days; every 200 closed the episode and
     the next 403 filed a fresh ticket (wq#4936, 4937, 4938, 4939, 5033, 5089 all open on
@@ -211,6 +227,7 @@ def test_provider_402_for_ten_minutes_cools_its_rungs_then_recovery_reenables(ma
     [t] = ctx.out.tickets
     assert t["title"].startswith("[selfheal] top up api.deepseek.com")
     assert "rotate" not in t["title"].lower()
+    assert t["lane"] == "frank-funding"                         # wq#4937: never build
     good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
     ctx = make_ctx(cfg, state, now=t0 + 900)
     _psweep(ctx, good)
