@@ -365,7 +365,24 @@ nodes:                  # CLASS 6
        On the facts actually on record this stays a live fleet node held to the same bar
        as sia/toilet/farida/rt-ax86u/bes: one unexplained outage with no ignore/
        sleepers-qualifying fact behind it is a real page, not nodes.ignore/sleepers. This
-       note just carries the context so the next page on anubis doesn't re-derive it."
+       note just carries the context so the next page on anubis doesn't re-derive it.
+       wq#4935 (2026-11-07 page, worked 2026-11-18): REPEAT, not a one-off. anubis was
+       back up when worked (`uptime` via fleet-exec: up 1 day 1:48). `journalctl
+       --list-boots` shows three silent deaths in 12 days: boot ending 2026-11-04T04:21:40Z
+       (back 05:33Z), 2026-11-07T04:14:33Z (dark until 2026-11-12T23:28Z, ~5.8 days), and
+       2026-11-16T10:45:53Z (back 2026-11-17T15:25Z). Each previous boot's journal just
+       stops mid-sshd-session: no shutdown sequence, no kernel message, journald flagged the
+       user journal 'corrupted or uncleanly shut down' at the next boot, and
+       /var/lib/systemd/pstore is empty -- that is power loss or a hard hang, not an OS
+       shutdown. Before 11-04 the prior boot had run 2026-08-31..11-04 without a break.
+       There is no anubis timer near 04:1xZ (list-timers: gitea-dump 00:45Z, apt/sysstat
+       elsewhere), and the 11-04 death was shared with maat and thoth plus plugs p3/p4/p7
+       (maat note), so suspect a shared power domain before anubis's own hardware. The plug
+       wattage corpus cannot decide power-loss vs hang: every node-labelled
+       homeassistant_sensor_power_w series (P9/anubis, bes, lumen, maat, thoth) stopped at
+       2026-11-03T00:18:40Z and only unlabelled p13/p14 still report. Follow-ups:
+       wq#5107 (cause of the silent stops), wq#5106 (corpus blindness). Still a live
+       node held to the paging bar; a further page here is a 4th unclean stop, not noise."
     maat: "wq#4844 (2026-11-04): offline on tailscale since 2026-11-04T04:17:13Z. maat is
        the vault PRIMARY (maat.pg_role=PRIMARY, vault.current_primary=maat, cloudflared
        origin for vault.lumennode.uk = 100.105.219.34:8222), so a maat page is a vault
