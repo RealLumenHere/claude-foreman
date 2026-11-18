@@ -1,0 +1,6 @@
+# wq#4908: input for requirements.lock (52 pins, every one sha256-hashed, CPython 3.14 x86_64).
+# Regenerate: create a scratch venv, then
+#   python3 -m pip --python <scratch>/bin/python install --report report.json -r requirements.in
+# and write one `name==version --hash=sha256:<archive_info sha256>` entry per report["install"]
+# item. Confirm labgrid-mcp still hashes to WHEEL_SHA256 in labgrid_mcp_launch.py.
+labgrid-mcp==0.1.5
