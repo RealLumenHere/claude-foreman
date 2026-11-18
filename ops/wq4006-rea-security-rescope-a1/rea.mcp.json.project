@@ -12,7 +12,7 @@
       "command": "ssh",
       "args": [
         "maksoor@100.81.204.74",
-        "/home/maksoor/.npm-global/bin/rea",
+        "/home/maksoor/re/bin/rea-guard",
         "mcp"
       ]
     }

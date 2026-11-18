@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# wq#4913 — guard wrapper for rea on maksoor (the remote RE workstation).
+# Mirrors Lumen's wq#4006 rea-guard: refuses self-update subcommands and
+# execs the pinned real binary for everything else.
+set -euo pipefail
+
+REAL_REA="${WQ4913_REAL_REA:-/home/maksoor/.npm-global/bin/rea}"
+
+for arg in "$@"; do
+  case "$arg" in
+    update|self-update|upgrade)
+      echo "rea-guard: '$arg' is blocked (wq#4913) — this install pins rea" \
+           "to the version recorded in PROVENANCE.json. Bump it via a" \
+           "reviewed PROVENANCE update, not a live self-update." >&2
+      exit 1
+      ;;
+  esac
+done
+
+exec "$REAL_REA" "$@"
