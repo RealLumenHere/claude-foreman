@@ -19,4 +19,10 @@ ExecStart=/usr/bin/python3 /home/lumen/bin/auto-dispatch
 ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
 # dispatch-batch detaches immediately; 8 min is generous headroom for 3 spawns + probes.
 TimeoutStartSec=480
+# wq#5084: dispatch-batch re-execs itself under setsid/nohup and returns at once, but setsid
+# does not leave this unit's cgroup. With the default KillMode=control-group systemd killed every
+# detached batch ~1s after this oneshot exited (first live pass 2026-11-18 16:24Z: 3 dispatches
+# logged, 0 workers, empty per-ticket logs). Kill only the main process; each batch hands off to
+# a lumen-run transient unit (its own cgroup) and exits by itself (claim wait <=60s).
+KillMode=process
 Nice=10
