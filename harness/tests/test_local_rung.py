@@ -161,7 +161,7 @@ def test_local_rung_end_to_end_wires_env_and_files_sonnet_verify_pass(tmp_path):
                             text=True, env=env)
     cols = dict(l.split(":", 1) for l in shown.stdout.splitlines() if ":" in l)
     cols = {k.strip(): v.strip() for k, v in cols.items()}
-    assert cols["model"] == "claude-sonnet-5"
+    assert cols["model"] == "claude-sonnet-5-5"   # wq#5083 lineup
     assert cols["effort"] == "high"
     assert cols["archetype"] == "verify-pass"
     assert cols["deps"] == str(ticket_id)

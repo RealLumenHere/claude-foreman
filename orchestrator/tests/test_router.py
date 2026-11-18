@@ -24,14 +24,14 @@ MANIFEST = os.path.join(ORCH_DIR, "..", "research", "models.yaml")
 
 # BUILD_PLAN §T3 verify: "assign 5 sample tickets across archetypes -> correct (model,effort)"
 SAMPLES = [
-    ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("claude-sonnet-5", "low")),
-    ("probe: CI hygiene for lumen-pr", "", "build", "probe-build", ("claude-sonnet-5", "medium")),
-    ("add conflict guard to lumen-pr", "", "build", "standard-engineering", ("claude-sonnet-5", "high")),
+    ("wire standing checks to systemd timers", "", "fleet", "mechanical-edit", ("claude-sonnet-5-5", "low")),
+    ("probe: CI hygiene for lumen-pr", "", "build", "probe-build", ("claude-sonnet-5-5", "medium")),
+    ("add conflict guard to lumen-pr", "", "build", "standard-engineering", ("claude-opus-5-5", "high")),
     ("audit: why does lpp-watchdog bypass the guard", "", "pokemon", "rca-investigation", ("claude-opus-5-5", "high")),
-    ("design lumen-memoryd new service", "", "memory", "novel-design", ("claude-fable-5", "high")),
+    ("design lumen-memoryd new service", "", "memory", "novel-design", ("claude-fable-5-2", "high")),
     ("research pack: agent farm prior art report", "", "research", "research-synthesis", ("claude-opus-5-5", "medium")),
-    ("fresh-eyes verify-pass of wq#600 fix", "", "build", "verify-pass", ("claude-sonnet-5", "high")),
-    ("restart the auth service", "", "fleet-fires", "fire-response", ("claude-sonnet-5", "high")),
+    ("fresh-eyes verify-pass of wq#600 fix", "", "build", "verify-pass", ("claude-sonnet-5-5", "high")),
+    ("restart the auth service", "", "fleet-fires", "fire-response", ("claude-opus-5-5", "high")),
 ]
 
 
@@ -87,7 +87,8 @@ def test_resolve_alias_fable_5_1_specifically(m):
     # the exact regression #127 named: fable-5-1's alias was missing from the old
     # hardcoded dict while fable-5's was present, so only this one silently broke.
     assert router.resolve_alias("fable-5-1") == "claude-fable-5-1"
-    assert router.resolve_alias("fable") == "claude-fable-5"
+    assert router.resolve_alias("fable") == "claude-fable-5-2"   # wq#5083: alias follows the current Fable
+    assert router.resolve_alias("fable-5") == "claude-fable-5"   # family shorthand still pins 5.0
 
 
 def test_haiku_alias_moved_to_haiku_5_5_and_fallback_table_agrees(m):
@@ -287,7 +288,7 @@ def test_attempt_count_downgrades_probe_build_without_pressure(m):
     # wq#2583: local-worker dropped from probe-build; primary is now sonnet-5@medium, and
     # each recorded fail walks one rung toward the haiku floor.
     r0, _ = router.select(m, "probe-build", fails=0)
-    assert (r0.model, r0.effort) == ("claude-sonnet-5", "medium")
+    assert (r0.model, r0.effort) == ("claude-sonnet-5-5", "medium")
     r1, reasons = router.select(m, "probe-build", fails=1)
     assert r1.model == "claude-haiku-5-5"
     assert any("attempt-count downgrade" in w for w in reasons)
@@ -299,19 +300,19 @@ def test_attempt_count_downgrades_mechanical_edit_without_pressure(m):
     # wq#2583: mechanical-edit's base chain is now a single cloud rung (local-worker
     # dropped), so it never has a second position to walk to — fails just stays put.
     r1, _ = router.select(m, "mechanical-edit", fails=1)
-    assert r1.model == "claude-sonnet-5" and r1.effort == "low" and r1.pool == "cloud"
+    assert r1.model == "claude-sonnet-5-5" and r1.effort == "low" and r1.pool == "cloud"
     r2, _ = router.select(m, "mechanical-edit", fails=2)
-    assert (r2.model, r2.effort) == ("claude-sonnet-5", "low")
+    assert (r2.model, r2.effort) == ("claude-sonnet-5-5", "low")
 
 
 def test_attempt_count_does_not_override_escalation_facts(m):
-    # standard-engineering's opus-5@medium(escalate-on-fail) still wins at fails=1 — the
-    # attempt-count trigger only walks the un-annotated base chain, escalation conditions
-    # still govern their own rungs.
+    # wq#5083: standard-engineering has no escalation rung any more (opus-5-5@high then
+    # opus-4-8@high): fails=1 walks the base chain. rca-investigation's annotated fable
+    # rung still unlocks on its own 2-fails condition, ahead of the base walk.
     r, _ = router.select(m, "standard-engineering", fails=1)
-    assert (r.model, r.effort) == ("claude-opus-5", "medium")
+    assert (r.model, r.effort) == ("claude-opus-4-8", "high")
     r, _ = router.select(m, "rca-investigation", fails=2)
-    assert (r.model, r.effort) == ("claude-fable-5", "high")
+    assert (r.model, r.effort) == ("claude-fable-5-2", "high")
 
 
 def test_route_cli_probe_build_fails_1_walks_to_the_haiku_floor(m):
@@ -342,10 +343,13 @@ def test_dominated_table_parsed(m):
     assert m.dominated_scoped[("claude-sonnet-5", "max")] == {"mechanical-edit", "probe-build"}
     assert m.is_dominated("claude-sonnet-5", "xhigh", "probe-build")
     assert not m.is_dominated("claude-sonnet-5", "xhigh", "rca-investigation")
-    # family rule: opus-4-x / sonnet-4-6 while the 5-gen sibling is LIVE
-    for old in ("claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"):
+    # family rule: opus-4-7 / sonnet-4-6 while the 5-gen sibling is LIVE. wq#5083: opus-4-6
+    # (orchestrator + security) and opus-4-8 (general second rung) are routed by Frank's call.
+    for old in ("claude-opus-4-7", "claude-sonnet-4-6"):
         for e in router.EFFORT_LADDER:
             assert m.is_dominated(old, e), old
+    for routed in ("claude-opus-4-8", "claude-opus-4-6"):
+        assert not m.is_dominated(routed, "high"), routed
 
 
 def test_dominated_never_selected_exhaustively(m):
@@ -432,17 +436,17 @@ def test_hard_deny_moves_to_next_model_not_lower_effort(m):
 
 def test_escalation_rungs_need_their_facts(m):
     r, _ = router.select(m, "standard-engineering", fails=0)
-    assert r.model == "claude-sonnet-5"
+    assert r.model == "claude-opus-5-5"
     r, _ = router.select(m, "standard-engineering", fails=1)
-    assert (r.model, r.effort) == ("claude-opus-5", "medium")
+    assert (r.model, r.effort) == ("claude-opus-4-8", "high")
     r, _ = router.select(m, "rca-investigation", fails=1)
     assert r.model == "claude-opus-5-5"
     r, _ = router.select(m, "rca-investigation", fails=2)
-    assert (r.model, r.effort) == ("claude-fable-5", "high")
+    assert (r.model, r.effort) == ("claude-fable-5-2", "high")
     r, _ = router.select(m, "rca-investigation", cross_subsystem=True)
-    assert r.model == "claude-fable-5"
+    assert r.model == "claude-fable-5-2"
     r, _ = router.select(m, "verify-pass", contradiction=True)
-    assert (r.model, r.effort) == ("claude-opus-5", "high")
+    assert (r.model, r.effort) == ("claude-opus-5-5", "high")
 
 
 def test_effort_ceiling_clamp(m):
@@ -461,7 +465,8 @@ def test_refusal_landing_table_and_keep_entitled(m):
     assert m.refusal_landing("claude-opus-5", "bio") is None
     assert "claude-opus-4-8" in m.keep_entitled()
     roster = {r["id"]: r for r in m.roster()}
-    assert roster["claude-opus-4-8"]["keep_entitled"] and not roster["claude-opus-4-8"]["routed"]
+    # wq#5083: opus-4-8 is routed now (standard-engineering / fire-response second rung)
+    assert roster["claude-opus-4-8"]["keep_entitled"] and roster["claude-opus-4-8"]["routed"]
     assert str(roster["claude-opus-4-8"]["status"]).startswith("LIVE")
 
 
@@ -495,21 +500,21 @@ def test_verify_pass_policy(m):
     assert not judgment.verify_required(m, "mechanical-edit", "claude-sonnet-5")[0]
     assert judgment.verify_required(m, "mechanical-edit", "deepseek-v4-flash")[0]
     rung, note = judgment.verifier_tuple(m, "claude-opus-5")
-    assert (rung.model, rung.effort) == ("claude-sonnet-5", "high")
-    rung, note = judgment.verifier_tuple(m, "claude-sonnet-5")
-    assert (rung.model, rung.effort) == ("claude-sonnet-5", "high") and "fresh instance" in note
-    # flip prefer_distinct_model -> opus-5@high when the author was sonnet-5
+    assert (rung.model, rung.effort) == ("claude-sonnet-5-5", "high")
+    rung, note = judgment.verifier_tuple(m, "claude-sonnet-5-5")
+    assert (rung.model, rung.effort) == ("claude-sonnet-5-5", "high") and "fresh instance" in note
+    # flip prefer_distinct_model -> opus-5-5@high when the author was the verifier model
     m2 = copy.copy(m)
     m2.verify_policy = dict(m.verify_policy, prefer_distinct_model=True)
-    rung, note = judgment.verifier_tuple(m2, "claude-sonnet-5")
-    assert (rung.model, rung.effort) == ("claude-opus-5", "high")
+    rung, note = judgment.verifier_tuple(m2, "claude-sonnet-5-5")
+    assert (rung.model, rung.effort) == ("claude-opus-5-5", "high")
 
 
 def test_judgment_due_cadence_triggers_and_max_reserved(m):
     now = dt.datetime(2026, 8, 16, 3, 0, tzinfo=dt.timezone.utc)   # Sat 20:00 PT: not quiet hours
     empty = {"last_run_at": None, "last_run_tickets_done": None, "runs": []}
     d = judgment.due(m, now=now, state=empty)
-    assert d["due"] and d["tuple"] == "claude-fable-5@high"
+    assert d["due"] and d["tuple"] == "claude-opus-4-6@high"   # wq#5083: orchestrator -> Opus 4.6
     recent = {"last_run_at": (now - dt.timedelta(minutes=30)).isoformat(), "last_run_tickets_done": 10, "runs": []}
     d = judgment.due(m, now=now, state=recent, triggers={"ticket_blocked_twice": [5]})
     assert not d["due"]  # min gap
@@ -519,14 +524,14 @@ def test_judgment_due_cadence_triggers_and_max_reserved(m):
     d = judgment.due(m, now=now, state=older, tickets_done=18)
     assert d["due"] and "tickets closed" in " ".join(d["why"])
     d = judgment.due(m, now=now, state=older, triggers={"ticket_blocked_twice": [5]})
-    assert d["due"] and d["tuple"] == "claude-fable-5@high"
+    assert d["due"] and d["tuple"] == "claude-opus-4-6@high"
     # hardest-investigation trigger: @max is reserved until CAL-1 measured data exists
     d = judgment.due(m, now=now, state=older, triggers={"rca_cross_subsystem": [7]})
-    assert d["tuple"] == "claude-fable-5@high" and any("reserved until CAL-1" in w for w in d["why"])
+    assert d["tuple"] == "claude-opus-4-6@high" and any("reserved until CAL-1" in w for w in d["why"])
     m2 = copy.copy(m)
     m2.raw = dict(m.raw, measured=[{"row": "x"}])
     d = judgment.due(m2, now=now, state=older, triggers={"rca_cross_subsystem": [7]})
-    assert d["tuple"] == "claude-fable-5@max"
+    assert d["tuple"] == "claude-opus-4-6@max"
     # cadence inside weekday quiet hours waits; a burn-down trigger does not
     quiet = dt.datetime(2026, 8, 17, 15, 0, tzinfo=dt.timezone.utc)   # Mon 08:00 PT
     stale = {"last_run_at": (quiet - dt.timedelta(hours=8)).isoformat(), "last_run_tickets_done": 0, "runs": []}
@@ -1013,7 +1018,7 @@ def test_mechanical_edit_still_wins_when_nothing_analytical_is_evidenced(m):
                                           "fleet", m)
     assert arch == "mechanical-edit", (arch, sig)
     rung, _ = router.select(m, arch)
-    assert (rung.model, rung.effort) == ("claude-sonnet-5", "low")
+    assert (rung.model, rung.effort) == ("claude-sonnet-5-5", "low")
     # and the wq#779 F3 tie-break still lets the OTHER cheap archetype win on equal
     # evidence against a pricier one — that fix is not what misrouted these tickets.
     arch, _ = router.classify_archetype("the fix could bypass the probe safeguard", "",
@@ -1170,7 +1175,7 @@ def test_assign_and_verify_pass_fire_on_scratch_wq(tmp_path):
     # dispatch-cmd carries the tuple through to fworker (wq#2583: mechanical-edit's
     # primary is now sonnet-5@low, off local-worker)
     cmd = subprocess.run(R + ["dispatch-cmd", str(ids[0][0]), "--repo", "/tmp/x"], capture_output=True, text=True, env=env).stdout
-    assert "--model claude-sonnet-5 --effort low --archetype mechanical-edit" in cmd
+    assert "--model claude-sonnet-5-5 --effort low --archetype mechanical-edit" in cmd
 
 
 # ---- wq#433 / ISSUE-LOG #56 class: lane says one repo, title says another. Dispatching

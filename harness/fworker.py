@@ -5141,7 +5141,7 @@ def resolve_tuple_from_ticket(args):
     if not args.archetype and arch:
         args.archetype = arch
     if not args.model:
-        args.model, args.effort = "claude-sonnet-5", args.effort or "high"
+        args.model, args.effort = "claude-sonnet-5-5", args.effort or "high"   # wq#5083 lineup
 
 
 # ---------------------------------------------------------------------------
@@ -5834,6 +5834,17 @@ def cmd_run(args):
     if args.resume:
         reconcile_on_resume(args.ticket)
     resolve_tuple_from_ticket(args)
+    # wq#5083: last line of the Fable security exclusion -- whatever stamped or passed the
+    # model, a security ticket (RE/exploit/firmware/...) never launches on Fable.
+    try:
+        g = router.security_guard(args.ticket, args.model, args.effort)
+    except Exception as e:  # noqa: BLE001 -- fail closed for Fable only
+        g = None
+        if (args.model or "").startswith("claude-fable") or (args.model or "").startswith("fable"):
+            g = ("claude-opus-4-6", "high", f"security_guard error ({e}); Fable refused fail-closed")
+    if g:
+        log(f"wq#5083 security_exclusion: {args.model}@{args.effort} -> {g[0]}@{g[1]}: {g[2]}")
+        args.model, args.effort = g[0], g[1]
 
     unmet = deps_unmet(args.ticket)
     if unmet:

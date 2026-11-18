@@ -50,26 +50,26 @@ defaults:
 
 archetypes:
   mechanical-edit:
-    primary_tuple: sonnet-5@low   # wq#2583 dropped local-worker from the chain (dec72fa2)
+    primary_tuple: sonnet-5-5@low   # wq#2583 dropped local-worker from the chain (dec72fa2)
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:
       max_turns: 10
 
   probe-build:
-    primary_tuple: sonnet-5@medium   # wq#2583 (dec72fa2)
+    primary_tuple: sonnet-5-5@medium   # wq#2583 (dec72fa2)
     max_turns: 600
     wall_clock_timeout_s: 3600
     local:
       max_turns: 40   # 2026-10-08 subtraction-phase2: 15 starved deepseek-v4-flash (cheap_cloud) at the lumen-pr step on wq#3627 (2 attempts, both TURNS, no hang); was tuned for 7-14B Mac rungs
 
   standard-engineering:
-    primary_tuple: sonnet-5@high
+    primary_tuple: opus-5-5@high   # wq#5083 lineup/routing refresh
     max_turns: 600
     wall_clock_timeout_s: 3600
 
   verify-pass:
-    primary_tuple: sonnet-5@high
+    primary_tuple: sonnet-5-5@high   # wq#5083 lineup/routing refresh
     max_turns: 600
     wall_clock_timeout_s: 3600
 
@@ -82,7 +82,7 @@ archetypes:
     # §4 step 2) shipped the read-reach grant: harness/permission-profiles/verify-probe.json,
     # selected over the per-repo repos.d/ union by fworker.resolve_worker_settings() when
     # archetype == "verify-probe" (VERIFY_PROBE_SETTINGS_FILE).
-    primary_tuple: sonnet-5@high
+    primary_tuple: sonnet-5-5@high   # wq#5083 lineup/routing refresh
     max_turns: 400
     wall_clock_timeout_s: 2400
     permission_profile_note: "harness/permission-profiles/verify-probe.json (design §5.2/§3, wq#4687)"
@@ -150,7 +150,7 @@ archetypes:
       ticket with `needs-web: <what failed>` rather than writing a doc from memory.
 
   novel-design:
-    primary_tuple: fable-5@high
+    primary_tuple: fable-5-2@high   # wq#5083 lineup/routing refresh
     max_turns: 600
     wall_clock_timeout_s: 3600
     # wq#5084: research-lane tickets routed here (wq#4860/4861/4863, 2026-11-05) got no web
@@ -198,7 +198,7 @@ archetypes:
   fire-response:
     # wq#717 (AUTO-5): fleet-fires manual-approval workflow — two-phase prompt
     # (diagnosis then apply), never local (LOCAL_ALLOWED_ARCHETYPES excluded it).
-    primary_tuple: sonnet-5@high
+    primary_tuple: opus-5-5@high   # wq#5083 lineup/routing refresh
     max_turns: 600
     wall_clock_timeout_s: 3600
     prompt_template: fire-diagnosis.md

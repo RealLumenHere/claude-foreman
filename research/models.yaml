@@ -30,7 +30,7 @@ defaults:
 
 models:
   - id: claude-fable-5
-    alias: fable            # DEFAULT fable = 5.0 (reverted 2026-09-02, ISSUE-LOG #38: 5.1 usage unmeasured, may burn MORE). also `best` where available; [1m] row exists (native 1M anyway)
+    # wq#5083 2026-11-18: no longer the `fable` alias (moved to claude-fable-5-2). Shorthand fable-5 still resolves here.
     status: LIVE            # needs CC >=2.1.170; we run 2.1.220
     context: 1M native
     efforts: [low, medium, high, xhigh, max]
@@ -75,8 +75,24 @@ models:
              "model-default effort hold on first run -> always pass --effort"]
     trust: "orchestrator sessions; novel-design; escalated RCA. Never a volume worker."
 
+  - id: claude-fable-5-2
+    alias: fable            # wq#5083 2026-11-18: current Fable (Frank: refresh to current lineup)
+    status: LIVE            # wq#5083: cli_canary probe ok on CC 2.1.296; modelUsage served as claude-fable-5-2
+    context: 1M native
+    efforts: [low, medium, high, xhigh, max]
+    default_effort: high
+    pools: [session, weekly_all, fable_weekly]
+    burn:
+      est: "UNMEASURED on this fleet (n=0); treat as fable-class (~2x opus)"
+      measured_tokens: null
+    quirks: ["thinking cannot be disabled", "cyber-flag -> auto-fallback opus-4-8, bio-flag -> opus-5",
+             "model-default effort hold on first run -> always pass --effort"]
+    trust: "novel-design (architecture/design WITHOUT security content) and the 2-fails rca escalation.
+      NEVER routed for RE / exploit / firmware / security tickets: see security_exclusion (wq#5083).
+      Orchestrator sessions moved to opus-4-6 (wq#5083). Never a volume worker."
+
   - id: claude-opus-5
-    alias: opus             # default model on Max since CC 2.1.219
+    # wq#5083 2026-11-18: no longer the `opus` alias (moved to claude-opus-5-5). Shorthand opus-5 still resolves here.
     status: LIVE
     context: 1M (auto-upgrade included on Max)
     efforts: [low, medium, high, xhigh, max]
@@ -101,9 +117,9 @@ models:
       unlike opus-5-5 below, so it is still where a bio refusal from another model lands)."
 
   - id: claude-opus-5-5
-    alias: opus-5-5          # NOT the default 'opus' alias (still claude-opus-5, see above) —
-                              # wq#2450 wires this in by archetype (routing: below), the same
-                              # pattern fable-5-1 used alongside fable-5.
+    alias: opus              # wq#5083 2026-11-18: current Opus; the `opus` alias moved here from
+                              # claude-opus-5 (wq#2450 had kept it pinned to opus-5). Shorthand
+                              # opus-5-5 still resolves here too.
     min_claude_code: 2.1.280  # wq#2527: the API's own answer to CLI 2.1.276 (wq#2525 captured
       # frame): "This model requires Claude Code version 2.1.280 or later". cli_canary holds
       # the rung below it and the daily drift check files an aq row.
@@ -158,7 +174,7 @@ models:
       the wq#2450 scoping call and why)."
 
   - id: claude-sonnet-5
-    alias: sonnet
+    # wq#5083 2026-11-18: no longer the `sonnet` alias (moved to claude-sonnet-5-5). Shorthand sonnet-5 still resolves here.
     status: LIVE            # needs >=2.1.197
     context: 1M native (no [1m] variant; autocompacts ~967K default)
     efforts: [low, medium, high, xhigh, max]
@@ -175,6 +191,19 @@ models:
         0/12, all 12 capped at max_turns 25 (turn-starved, not model-limited)."
     api_price_mtok: {in: 3, out: 15, cache_read: 0.30, cache_write: 6.00, note: "CALL_AUDIT.md (wq#706) solved these vs CLI-reported total_cost_usd, 0.0 relative error across 5 clean-set sessions — CLI bills 3/15 now, not the intro 2/10 rate"}
     trust: "standard-engineering; probe-build; mechanical-edit; verify-pass gate model."
+
+  - id: claude-sonnet-5-5
+    alias: sonnet           # wq#5083 2026-11-18: current Sonnet
+    status: LIVE            # wq#5083: cli_canary probe ok on CC 2.1.296; modelUsage served as claude-sonnet-5-5
+    context: 1M
+    efforts: [low, medium, high, xhigh, max]
+    default_effort: high
+    pools: [session, weekly_all]
+    burn:
+      est: "UNMEASURED on this fleet (n=0); treat as sonnet-class"
+      measured_tokens: null
+    trust: "grunt work / simple fixes (mechanical-edit, probe-build) and the verify-pass gate (wq#5083).
+      research-synthesis downgrade rung."
 
   - id: claude-haiku-4-5
     status: LIVE            # wq#3618: off the routing chains, pin-only; 'haiku' moved to haiku-5-5
@@ -220,9 +249,12 @@ models:
       reports contextWindow 200000 (not 1M) and accepts --effort without saying whether it applied"]
 
   # LISTED-NOT-ROUTED (pin targets / fallback landing zones; no price or capability edge on subscription)
-  - {id: claude-opus-4-8,  status: LIVE,      efforts: [low,medium,high,xhigh,max], note: "Fable cyber-fallback target; api 5/25"}
+  # wq#5083 2026-11-18 (Frank): opus-4-8 and opus-4-6 are ROUTED again, not pin-only. opus-4-8 is the
+  # standard-engineering / fire-response second rung; opus-4-6 is the orchestrator model and the
+  # security_exclusion primary. Both probed ok (cli_canary, CC 2.1.296) on 2026-11-18.
+  - {id: claude-opus-4-8,  status: LIVE,      efforts: [low,medium,high,xhigh,max], note: "Fable cyber-fallback target; api 5/25; routed (wq#5083)"}
   - {id: claude-opus-4-7,  status: LIVE-probe, efforts: [low,medium,high,xhigh,max], note: "xhigh was its default; P1 confirms picker"}
-  - {id: claude-opus-4-6,  status: LIVE-probe, efforts: [low,medium,high,max],       note: "no xhigh; P1 confirms"}
+  - {id: claude-opus-4-6,  status: LIVE,      efforts: [low,medium,high,max],       note: "no xhigh; orchestrator + security_exclusion primary (wq#5083); modelUsage served as claude-opus-4-6 2026-11-18"}
   - {id: claude-sonnet-4-6, status: LIVE,     efforts: [low,medium,high,max],        note: "1M needs credits (closed for us)"}
   - {id: claude-3-opus-20240229, status: TOMBSTONE-CONFIRMED, note: "P1 live 2026-08-14: shows in picker but does NOT serve (is_error, model may-not-exist/no-access, EOL Jan 5 2026). Unroutable."}
   - {id: claude-mythos-5,  status: NOT-OURS,  note: "approved-orgs only; the reserved T02 slot in the intended roster"}
@@ -385,12 +417,13 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   # rule: local-worker returns to a chain only after a local-rung member passes the macbench
   # agentic suite (wq#2246) at >=60% on mechanical-edit-shaped tasks with a FALSE_COMPLETE
   # rate <=10%.
-  mechanical-edit:      [sonnet-5@low]
+  mechanical-edit:      [sonnet-5-5@low]          # wq#5083: grunt work -> current Sonnet
   # wq#3618: haiku-5-5 replaces haiku-4-5 as the haiku rung on its CAL-1 re-run. haiku-4-5 is
   # not kept as a third rung: the attempt-count walk would hand a twice-failed ticket to the
   # older, slower model. It stays LIVE and listed for explicit `--model haiku-4-5` pins.
-  probe-build:          [sonnet-5@medium, haiku-5-5]
-  standard-engineering: [sonnet-5@high,   sonnet-5@medium, opus-5@medium(escalate-on-fail)]
+  probe-build:          [sonnet-5-5@medium, haiku-5-5]
+  # wq#5083 (Frank 2026-11-18): general fleet/build/infra -> Opus 5.5, Opus 4.8 behind it (fails-walk).
+  standard-engineering: [opus-5-5@high,   opus-4-8@high]
   # wq#2450 2026-09-24: rca-investigation + research-synthesis primary moved opus-5 -> opus-5-5.
   # Effort rungs shifted down one notch (xhigh->high, high->medium), not carried over verbatim:
   # the vendor prompting guide measured opus-5-5@medium matching/beating opus-5@high on
@@ -402,19 +435,19 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   # bump — see fable-5's `trust:` line and the wq#750 measured note above it), so "route
   # frontier tickets to opus-5-5 not opus-5" has nothing to swap here. Flag for Frank if the
   # intent was actually to move novel-design's primary off fable-5 entirely.
-  rca-investigation:    [opus-5-5@high,  opus-5-5@medium, fable-5@high(2-fails-or-cross-subsystem)]
-  novel-design:         [fable-5@high]    # design doc only; execution re-ticketed
+  rca-investigation:    [opus-5-5@high,  opus-5-5@medium, fable-5-2@high(2-fails-or-cross-subsystem)]   # security tickets never reach the fable rung (security_exclusion)
+  novel-design:         [fable-5-2@high]  # architecture/design WITHOUT security content (wq#5083); design doc only; execution re-ticketed
   long-horizon-campaign: [DECOMPOSE]      # orchestrator splits; never one worker
-  research-synthesis:   [opus-5-5@medium, sonnet-5@high]
-  verify-pass:          [sonnet-5@high,   opus-5@high(on-contradiction)]
+  research-synthesis:   [opus-5-5@medium, sonnet-5-5@high]
+  verify-pass:          [sonnet-5-5@high, opus-5-5@high(on-contradiction)]
   # design/orchestrator_verify_lane.md §5.2 (archetype 10, router.ARCHETYPE_NUMBERS):
   # same tuple as verify-pass -- verify-probe is verify-pass's grant envelope, not a
   # different model/effort call. The build ticket for option A (not this one) adds the
   # permission-profile/add_dirs sibling in harness/agents.yaml.
-  verify-probe:         [sonnet-5@high,   opus-5@high(on-contradiction)]
-  fire-response:        [sonnet-5@high,   opus-5@high(escalate-on-fail)]   # wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
-  orchestrator:         [fable-5@high]    # fable-5@max reserved for hardest investigations until CAL data justifies more
-  decomposer:           [opus-5@medium, opus-5@high]  # wq#2515: the DECOMPOSE consumer's planning call
+  verify-probe:         [sonnet-5-5@high, opus-5-5@high(on-contradiction)]
+  fire-response:        [opus-5-5@high,   opus-4-8@high]   # wq#5083: fleet infra tier; wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
+  orchestrator:         [opus-4-6@high]   # wq#5083 (Frank 2026-11-18): orchestrator sessions -> Opus 4.6, always
+  decomposer:           [opus-5-5@medium, opus-5-5@high]  # wq#2515: the DECOMPOSE consumer's planning call
                                           # (dispatcher/decompose_planner.py). Planning work, never
                                           # xhigh; the planner clamps any out-of-band effort.
 
@@ -425,10 +458,29 @@ local_standard_engineering: false
 dominated_never_select:
   - fable-5@low
   - fable-5@medium
-  - "all opus-4-x and sonnet-4-6 tuples while 5-gen sibling selectable"
+  - fable-5-2@low
+  - fable-5-2@medium
+  # wq#5083: was "all opus-4-x ..." -- opus-4-6 (orchestrator, security) and opus-4-8 (general
+  # second rung) are routed by Frank's decision 2026-11-18, so only opus-4-7 stays family-dominated.
+  - "all opus-4-7 and sonnet-4-6 tuples while 5-gen sibling selectable"
   - sonnet-5@xhigh (archetypes 1-2)
   - sonnet-5@max   (archetypes 1-2)
+  - sonnet-5-5@xhigh (archetypes 1-2)
+  - sonnet-5-5@max   (archetypes 1-2)
   - opus-5@low     # provisional — CAL-1 tests sonnet-5@high against it
+
+# ── security exclusion (wq#5083, Frank 2026-11-18) ──
+# A ticket that touches RE / exploit / firmware / security work NEVER runs on Fable, whatever its
+# archetype or stored model stamp. router.is_security_ticket() matches `tags` against: bracket tags
+# and words in the title, the lane, the subsystems, and words in the detail (RE is matched
+# case-sensitively; `sec` only as a bracket tag / lane / subsystem). A match swaps the archetype's
+# chain for `chain` below; any rung whose model starts with a `never_model_prefixes` entry is
+# refused even if something else hands it in (dispatch_cmd + fworker re-check the stored stamp).
+security_exclusion:
+  never_model_prefixes: [claude-fable-]
+  chain: [opus-4-6@high, opus-5-5@high]
+  exempt_archetypes: [long-horizon-campaign]   # DECOMPOSE has no model; each sub-ticket is routed on its own
+  tags: [RE, miko, exploit, firmware, security, sec, mtkclient, edl, flashrom, ghidra, reverse engineer]   # a phrase tag prefix-matches (engineer/-ed/-ing)
 
 # ── refusal-fallback routing (decompiled from 2.1.220, SRC FQt) ──
 # When a model refuses (stop_reason "refusal"), CC silently retries the turn on:
@@ -452,7 +504,7 @@ effort_resolution:
   launch_pin_models: [fable-5, opus-4-8, opus-4-7]   # first run holds default until explicit --effort
   clear_pin: "pass explicit --effort (runs yW(), clears all pins globally)"
   ceilings:            # SRC OI/eqe/I_e exclusion lists
-    full_incl_xhigh_max: [fable-5, opus-5, opus-5-5, opus-4-8, opus-4-7, sonnet-5]   # wq#2450:
+    full_incl_xhigh_max: [fable-5, fable-5-2, opus-5, opus-5-5, opus-4-8, opus-4-7, sonnet-5, sonnet-5-5]   # wq#2450 (+wq#5083 lineup):
       # opus-5-5 supports xhigh/max per its prompting guide ("Reserve xhigh and max for work
       # where you've measured a quality gain") but router.py's routing chains default it to
       # medium/high (see `routing:` above) — this ladder documents the CLI's raw capability,
@@ -472,9 +524,9 @@ sources:
 
 # ── orchestrator tier policy (wq#617, T3) — read by orchestrator/router.py + judgment.py ──
 verify_pass:            # archetype 8: adversarial re-check of a SHIPPED diff (FOREMAN_RESEARCH §15)
-  tuple: sonnet-5@high
-  escalate_on_contradiction: opus-5@high
-  distinct_model_alternate: opus-5@high   # used only when prefer_distinct_model AND author was sonnet-5
+  tuple: sonnet-5-5@high                  # wq#5083 lineup refresh
+  escalate_on_contradiction: opus-5-5@high
+  distinct_model_alternate: opus-5-5@high # used only when prefer_distinct_model AND author was sonnet
   prefer_distinct_model: false            # doctrine: fresh INSTANCE always; distinct MODEL "where possible" —
                                           # opus-5@high is the only ≠-sonnet verifier we trust, and paying opus
                                           # for every sonnet diff is a CAL-1 question. Flip after calibration.
@@ -484,9 +536,9 @@ verify_pass:            # archetype 8: adversarial re-check of a SHIPPED diff (F
   lane: build
   pri: 2
 
-judgment:               # Fable-5@high orchestrator judgment sessions (BUILD_PLAN §T3)
-  tuple: fable-5@high
-  max_tuple: fable-5@max
+judgment:               # orchestrator judgment sessions (BUILD_PLAN §T3); wq#5083: Opus 4.6, was fable-5
+  tuple: opus-4-6@high
+  max_tuple: opus-4-6@max
   max_reserved_until: CAL-1               # @max only for `hardest-investigation` triggers until routing rows carry measured[]
   cadence_hours: 6                        # a judgment session is due this long after the last one ...
   cadence_tickets_closed: 8               # ... or after this many tickets closed since, whichever first

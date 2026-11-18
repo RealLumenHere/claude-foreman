@@ -164,9 +164,10 @@ def test_an_oversized_fake_llm_plan_is_rejected():
 
 # ---- routing row -----------------------------------------------------------------
 
-def test_routing_row_is_opus5_at_medium_or_high_never_xhigh():
+def test_routing_row_is_opus55_at_medium_or_high_never_xhigh():
+    # wq#5083: decomposer row moved opus-5 -> opus-5-5
     model, effort = dp.routing_rung(os.path.join(dp.REPO_ROOT, "research", "models.yaml"))
-    assert model == "claude-opus-5" and effort in ("medium", "high")
+    assert model == "claude-opus-5-5" and effort in ("medium", "high")
 
 
 def test_routing_rung_clamps_xhigh_and_survives_a_missing_file(tmp_path):

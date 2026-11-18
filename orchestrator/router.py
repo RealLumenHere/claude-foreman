@@ -28,11 +28,16 @@ Doctrine, in the order it is applied:
      (bio -> opus-5, cyber -> opus-4-8, opus-5-origin bio = hard refuse). The router never
      SELECTS opus-4-8 (dominated by opus-5) but reports it as keep_entitled and can tell a
      supervisor where a refusal will land (`refusal_landing`).
+  6. Security exclusion (wq#5083, Frank 2026-11-18): a ticket that touches RE / exploit /
+     firmware / security work (models.yaml `security_exclusion.tags`, is_security_ticket)
+     NEVER runs on Fable. Its archetype chain is swapped for `security_exclusion.chain`
+     (opus-4-6, then opus-5-5), any never-prefixed rung is refused in select(), and a stale
+     Fable stamp on such a ticket is re-routed by dispatch_cmd() and fworker (security_guard).
 
 CLI (all read-only except `assign`, which writes the tuple into wq via `wq edit`):
     router.py classify  <ticket-id> | --title T [--detail D] [--lane L]
     router.py route     <archetype> [--attempt N] [--fails N] [--cross-subsystem]
-                        [--pressure MODEL=ok|tight|deny ...] [--live]
+                        [--pressure MODEL=ok|tight|deny ...] [--live] [--security]
     router.py assign    <ticket-id> [--archetype A] [--dry-run] [--live]
     router.py dispatch-cmd <ticket-id> [--repo PATH]    # the fworker command line;
                         --repo derives from repo_for_ticket() when omitted — the
@@ -325,6 +330,8 @@ class Manifest:
         # wq#2133: flipped after the local tok/s numbers land; false = standard-engineering
         # keeps its cloud-only row
         self.local_standard_engineering = data.get("local_standard_engineering") is True
+        # wq#5083: Fable security exclusion
+        self.security = self._parse_security(data.get("security_exclusion") or {})
         self.check()
 
     # ---- dominated ---------------------------------------------------------------
@@ -437,6 +444,29 @@ class Manifest:
             })
         return rows
 
+    # ---- security exclusion (wq#5083) --------------------------------------------
+    @staticmethod
+    def _parse_security(raw):
+        chain = [parse_rung(s) for s in (raw.get("chain") or SECURITY_FALLBACK_CHAIN)]
+        return {
+            "never_model_prefixes": list(raw.get("never_model_prefixes") or SECURITY_NEVER_PREFIXES),
+            "chain": chain,
+            "exempt_archetypes": set(raw.get("exempt_archetypes") or ["long-horizon-campaign"]),
+            "tags": [str(t) for t in (raw.get("tags") or SECURITY_DEFAULT_TAGS)],
+        }
+
+    def never_for_security(self, model):
+        """True when `model` may never run a security ticket (every Fable generation)."""
+        model = resolve_alias(model or "")
+        return any(model.startswith(p) for p in self.security["never_model_prefixes"])
+
+    def security_chain(self, archetype):
+        """The chain a security ticket of `archetype` routes on: the archetype's own chain for
+        an exempt archetype (DECOMPOSE), else security_exclusion.chain."""
+        if archetype in self.security["exempt_archetypes"]:
+            return self.chain(archetype)
+        return list(self.security["chain"])
+
     # ---- self-check (the probe's section A) --------------------------------------
     def check(self):
         problems = []
@@ -460,9 +490,96 @@ class Manifest:
             st = str((self.models.get(mid) or {}).get("status", ""))
             if not st.startswith("LIVE"):
                 problems.append(f"keep_entitled {mid} is not LIVE in models list ({st!r})")
+        # wq#5083: the security chain itself must be routable and Fable-free
+        if not self.security["chain"]:
+            problems.append("security_exclusion.chain is empty")
+        for r in self.security["chain"]:
+            if self.never_for_security(r.model):
+                problems.append(f"security_exclusion.chain holds never-for-security rung {r}")
+            if r.pool == "cloud" and r.model not in self.models:
+                problems.append(f"security_exclusion.chain rung {r} not in models list")
+            if r.effort and r.effort not in self.efforts_for(r.model):
+                problems.append(f"security_exclusion.chain rung {r}: effort not supported")
+            why = self.is_dominated(r.model, r.effort)
+            if why:
+                problems.append(f"security_exclusion.chain contains dominated rung {r}: {why}")
+        for arch in self.security["exempt_archetypes"]:
+            if any(r.model != "DECOMPOSE" and self.never_for_security(r.model)
+                   for r in self.routing.get(arch, [])):
+                problems.append(f"security exempt archetype {arch} routes a never-for-security model")
         if problems:
             raise ManifestError("; ".join(problems))
         return True
+
+
+# ---- security exclusion (wq#5083) ------------------------------------------------------
+# Fallbacks only: models.yaml security_exclusion is the source of truth.
+SECURITY_NEVER_PREFIXES = ("claude-fable-",)
+SECURITY_FALLBACK_CHAIN = ("opus-4-6@high", "opus-5-5@high")
+SECURITY_DEFAULT_TAGS = ("RE", "miko", "exploit", "firmware", "security", "sec", "mtkclient",
+                         "edl", "flashrom", "ghidra", "reverse engineer")
+# tags matched ONLY as a bracket tag / lane / subsystem token, never as a prose word
+_SECURITY_TOKEN_ONLY = {"sec"}
+_SEC_SPLIT_RE = re.compile(r"[-_,\s/:.]+")
+
+
+def _sec_tokens(*texts):
+    out = set()
+    for t in texts:
+        out.update(x for x in _SEC_SPLIT_RE.split((t or "").lower()) if x)
+    return out
+
+
+def is_security_ticket(t, manifest=None):
+    """wq#5083 -> [matched signals] (empty = not a security ticket). `t` is a wq ticket dict
+    (title/detail/lane/subsystems). Over-matching is the safe direction: a false positive costs
+    an Opus run instead of a Fable/Sonnet one; a false negative puts RE work on Fable."""
+    manifest = manifest or load_manifest()
+    title, detail = t.get("title") or "", t.get("detail") or ""
+    lane, subs = t.get("lane") or "", t.get("subsystems") or ""
+    tag_tokens = _sec_tokens(*_TAG_RE.findall(title), lane, subs)
+    hits = []
+    for tag in manifest.security["tags"]:
+        low = tag.lower()
+        if " " not in low and low in tag_tokens:
+            hits.append(f"tag/lane/subsystem {tag}")
+            continue
+        if low in _SECURITY_TOKEN_ONLY:
+            continue
+        if tag == "RE":   # case-sensitive: 're-run', 'regex', 'Re:' must not match
+            pat = re.compile(r"(?<![\w-])RE(?![\w-])")
+        elif " " in low:  # phrase, prefix match ('reverse engineer' covers -ed/-ing)
+            pat = re.compile(r"(?<!\w)" + r"[\s-]+".join(map(re.escape, low.split())), re.IGNORECASE)
+        else:
+            pat = re.compile(r"(?<!\w)" + re.escape(low) + r"(?!\w)", re.IGNORECASE)
+        if pat.search(title):
+            hits.append(f"title word {tag}")
+        elif pat.search(detail):
+            hits.append(f"detail word {tag}")
+    return hits
+
+
+def security_guard(ticket, model, effort=None, manifest=None):
+    """wq#5083 last line: -> None when (model, effort) may run `ticket`, else
+    (new_model, new_effort, reason). Cheap no-op for any non-Fable model (no wq call).
+    `ticket` is an id or a ticket dict. Fail-closed: if the ticket cannot be read, a Fable
+    model is still swapped (unknown content is treated as security content)."""
+    manifest = manifest or load_manifest()
+    if not model or not manifest.never_for_security(model):
+        return None
+    try:
+        t = ticket if isinstance(ticket, dict) else wq_show(ticket)
+        hits = is_security_ticket(t, manifest)
+        arch = _stored_archetype(t) or "standard-engineering"
+    except SystemExit:
+        hits, arch = ["ticket unreadable (fail-closed)"], "standard-engineering"
+    if not hits:
+        return None
+    rung, _ = select(manifest, arch, security=True)
+    if rung is None or rung.model == "DECOMPOSE":
+        rung = manifest.security["chain"][0]
+    return rung.model, manifest.clamp_effort(rung.model, rung.effort), \
+        f"security_exclusion: {resolve_alias(model)} never runs security tickets ({'; '.join(hits[:3])})"
 
 
 _MANIFEST = None
@@ -559,7 +676,7 @@ def availability_check(manifest, now=None):
 
 
 def candidates(manifest, archetype, fails=0, cross_subsystem=False, contradiction=False,
-               available_only=True):
+               available_only=True, security=False):
     """The eligible chain for this ticket's facts, in preference order, dominated rungs
     removed (defensively; check() already refuses manifests that contain them). With
     available_only (wq#2133) rungs failing availability_check() are removed too; select()
@@ -567,9 +684,12 @@ def candidates(manifest, archetype, fails=0, cross_subsystem=False, contradictio
     rung still counts as a position in the chain."""
     usable = availability_check(manifest) if available_only else (lambda rung: None)
     out = []
-    for r in manifest.chain(archetype):
+    chain = manifest.security_chain(archetype) if security else manifest.chain(archetype)
+    for r in chain:
         if not _condition_met(r.condition, fails, cross_subsystem, contradiction):
             continue
+        if security and r.model != "DECOMPOSE" and manifest.never_for_security(r.model):
+            continue   # wq#5083
         if r.model != "DECOMPOSE" and manifest.is_dominated(r.model, r.effort, archetype):
             continue
         if usable(r):
@@ -579,7 +699,7 @@ def candidates(manifest, archetype, fails=0, cross_subsystem=False, contradictio
 
 
 def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False,
-           contradiction=False, allow_local=True):
+           contradiction=False, allow_local=True, security=False):
     """Pick the (model, effort) for one dispatch.
 
     pressure(model) -> 'ok' | 'tight' | 'deny'   (default: everything 'ok')
@@ -597,8 +717,10 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
     pressure = pressure or (lambda m: "ok")
     reasons = []
     cands = candidates(manifest, archetype, fails, cross_subsystem, contradiction,
-                       available_only=False)
+                       available_only=False, security=security)
     unavailable = availability_check(manifest)
+    if security:
+        reasons.append("security_exclusion: Fable never selected; security chain in use (wq#5083)")
     if not cands:
         return None, [f"no eligible rung for {archetype}"]
     if cands[0].model == "DECOMPOSE":
@@ -632,6 +754,9 @@ def select(manifest, archetype, *, pressure=None, fails=0, cross_subsystem=False
         why = unavailable(r)
         if why:
             reasons.append(f"skip {r}: {why}")
+            continue
+        if security and manifest.never_for_security(r.model):   # wq#5083 belt-and-braces
+            reasons.append(f"skip {r}: security_exclusion")
             continue
         p = pressure(r.model) if r.pool == "cloud" else "ok"
         if p == "deny":
@@ -1048,8 +1173,11 @@ def assign(ticket_id, *, archetype=None, manifest=None, pressure=None, dry_run=F
         arch, signals = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""), manifest)
     subs = [s for s in (t.get("subsystems") or "").split(",") if s]
     cross = cross_subsystem or len(subs) > 1
-    rung, reasons = select(manifest, arch, pressure=pressure, fails=fails, cross_subsystem=cross)
+    sec = is_security_ticket(t, manifest)   # wq#5083
+    rung, reasons = select(manifest, arch, pressure=pressure, fails=fails, cross_subsystem=cross,
+                           security=bool(sec))
     decision = {"ticket": int(ticket_id), "archetype": arch, "signals": signals,
+                "security": sec,
                 "rung": rung.as_dict() if rung else None, "reasons": reasons,
                 "written": False}
     if rung is None or rung.model == "DECOMPOSE" or dry_run:
@@ -1564,6 +1692,10 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_overrid
                 f"router: wq#{ticket_id} lane {t.get('lane')!r} has no LANE_REPO entry — "
                 f"pass --repo explicitly (never guess /home/lumen)")
     model, effort, arch = t.get("model"), t.get("effort"), t.get("archetype")
+    manifest = manifest or load_manifest()
+    if (model not in (None, "", "None") and manifest.never_for_security(model)
+            and is_security_ticket(t, manifest)):
+        model = None   # wq#5083: a Fable stamp on a security ticket is re-routed, never run
     if model in (None, "", "None") or prefix_overrides_stored(t):
         d = assign(ticket_id, manifest=manifest)
         if not d.get("rung"):
@@ -1571,6 +1703,9 @@ def dispatch_cmd(ticket_id, repo=None, *, manifest=None, env=None, model_overrid
         model, effort, arch = d["rung"]["model"], d["rung"]["effort"], d["archetype"]
     if model_override:
         model = model_override
+    g = security_guard(t, model, effort, manifest)   # wq#5083: covers model_override too
+    if g:
+        model, effort = g[0], g[1]
     # RELIABILITY_SPEC.md §E: TimeoutStopSec>=60 on worker units so a `systemctl stop`/
     # unit-recycle sends SIGTERM and gives fworker's own child-kill escalation
     # (fworker.run_child, SIGTERM then SIGKILL) and the CLI's SessionEnd hooks time to
@@ -1645,6 +1780,7 @@ def main(argv=None):
     s.add_argument("--contradiction", action="store_true")
     s.add_argument("--pressure", action="append", metavar="MODEL=ok|tight|deny")
     s.add_argument("--live", action="store_true", help="ask the T1 governor for pressure")
+    s.add_argument("--security", action="store_true", help="route as a security ticket (wq#5083)")
 
     s = sub.add_parser("assign"); s.add_argument("ticket", type=int)
     s.add_argument("--archetype"); s.add_argument("--dry-run", action="store_true")
@@ -1664,7 +1800,9 @@ def main(argv=None):
                           "dominated_exact": sorted(f"{m}@{e}" for m, e in manifest.dominated_exact),
                           "dominated_scoped": {f"{m}@{e}": sorted(v) for (m, e), v in manifest.dominated_scoped.items()},
                           "dominated_families": manifest.dominated_families,
-                          "keep_entitled": manifest.keep_entitled()}, indent=1))
+                          "keep_entitled": manifest.keep_entitled(),
+                          "security_chain": [r.spec() for r in manifest.security["chain"]],
+                          "security_never": manifest.security["never_model_prefixes"]}, indent=1))
         return 0
     if args.cmd == "roster":
         for r in manifest.roster():
@@ -1678,13 +1816,15 @@ def main(argv=None):
             t = wq_show(args.ticket)
             arch, sig = classify_archetype(t.get("title", ""), t.get("detail", ""), t.get("lane", ""), manifest)
         else:
+            t = {"title": args.title or "", "detail": args.detail, "lane": args.lane}
             arch, sig = classify_archetype(args.title or "", args.detail, args.lane, manifest)
-        print(json.dumps({"archetype": arch, "signals": sig}))
+        print(json.dumps({"archetype": arch, "signals": sig,
+                          "security": is_security_ticket(t, manifest)}))
         return 0
     if args.cmd == "route":
         rung, reasons = select(manifest, args.archetype, pressure=_pressure_from_args(args),
                                fails=args.fails, cross_subsystem=args.cross_subsystem,
-                               contradiction=args.contradiction)
+                               contradiction=args.contradiction, security=args.security)
         print(json.dumps({"archetype": args.archetype, "rung": rung.as_dict() if rung else None,
                           "reasons": reasons}))
         return 0 if rung else 1

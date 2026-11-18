@@ -89,13 +89,13 @@ def test_old_cli_holds_opus55_and_routes_to_next_rung(cli, manifest):
     rung, _ = router.select(manifest, "research-synthesis")
     assert rung.model == OPUS55                   # no evidence yet: nothing held
 
-    res = cli_canary.refresh([OPUS55, "claude-sonnet-5"], "2.1.276")
+    res = cli_canary.refresh([OPUS55, "claude-sonnet-5-5"], "2.1.276")
     assert res[OPUS55]["ok"] is False and res[OPUS55]["needs"] == "2.1.280"
     assert cli_canary.TOO_OLD in res[OPUS55]["reason"]
-    assert res["claude-sonnet-5"]["ok"] is True
+    assert res["claude-sonnet-5-5"]["ok"] is True
 
     rung, reasons = router.select(manifest, "research-synthesis")
-    assert rung.spec() == "claude-sonnet-5@high"
+    assert rung.spec() == "claude-sonnet-5-5@high"   # wq#5083 lineup
     assert any(cli_canary.HOLD_TAG in r and OPUS55 in r for r in reasons)
 
 
@@ -118,7 +118,7 @@ def test_cli_upgrade_is_a_cache_miss_and_clears_the_hold(cli, manifest, monkeypa
 def test_min_claude_code_holds_without_any_probe(cli):
     m = router.load_manifest(MANIFEST, force=True)       # real manifest: min_claude_code 2.1.280
     rung, reasons = router.select(m, "research-synthesis")
-    assert rung.spec() == "claude-sonnet-5@high"
+    assert rung.spec() == "claude-sonnet-5-5@high"
     assert any("needs claude-code >= 2.1.280, installed 2.1.276" in r for r in reasons)
     assert calls(cli) == []                             # held from package.json alone
 
@@ -198,7 +198,7 @@ def test_classify(rc, out, err, ok):
 
 def test_ladder_models_are_live_claude_rungs_only():
     models = cli_canary.ladder_models(router.load_manifest(MANIFEST, force=True))
-    assert OPUS55 in models and "claude-sonnet-5" in models
+    assert OPUS55 in models and "claude-sonnet-5-5" in models
     assert all(m.startswith("claude-") for m in models)
 
 

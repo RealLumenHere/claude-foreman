@@ -1,4 +1,4 @@
-# lumen-auto-dispatch.timer -- 5-min cadence for lumen-auto-dispatch.service.
+# lumen-auto-dispatch.timer -- 2-min cadence for lumen-auto-dispatch.service (wq#5083, was 5-min).
 # SHIPS DISABLED: nothing runs until Frank runs
 #     sudo systemctl enable --now lumen-auto-dispatch.timer
 # Instant stop without systemd:  touch /home/lumen/foreman/DISPATCH_PAUSE
@@ -6,13 +6,13 @@
 # BEFORE enabling, read the ENABLEMENT NOTES at the top of /home/lumen/foreman/auto-dispatch.yaml
 # (old foreman broker is breaker-latched; usage poller is stale -> service halts by design).
 [Unit]
-Description=5-min cadence for lumen-auto-dispatch
+Description=2-min cadence for lumen-auto-dispatch
 Documentation=file:///home/lumen/foreman/auto-dispatch.yaml
 
 [Timer]
 OnBootSec=10min
-OnUnitActiveSec=5min
-RandomizedDelaySec=30
+OnUnitActiveSec=2min
+RandomizedDelaySec=15
 AccuracySec=30s
 # A missed window is skipped, never replayed in a burst.
 Persistent=false

@@ -73,15 +73,15 @@ def verifier_tuple(manifest, author_model=None):
     """sonnet-5@high, fresh instance. Model distinct from the author only if the policy
     asks for it (see models.yaml verify_pass.prefer_distinct_model)."""
     pol = manifest.verify_policy or {}
-    rung = router.parse_rung(pol.get("tuple", "sonnet-5@high"))
+    rung = router.parse_rung(pol.get("tuple", "sonnet-5-5@high"))
     note = "fresh instance"
     if author_model and router.resolve_alias(author_model) == rung.model:
         if pol.get("prefer_distinct_model"):
-            alt = router.parse_rung(pol.get("distinct_model_alternate", "opus-5@high"))
+            alt = router.parse_rung(pol.get("distinct_model_alternate", "opus-5-5@high"))
             rung, note = alt, f"distinct model from author {author_model}"
         else:
             note = f"fresh instance, same model as author ({author_model}); escalate " \
-                   f"{pol.get('escalate_on_contradiction', 'opus-5@high')} on contradiction"
+                   f"{pol.get('escalate_on_contradiction', 'opus-5-5@high')} on contradiction"
     why = manifest.is_dominated(rung.model, rung.effort, "verify-pass")
     if why:
         raise router.ManifestError(f"verify_pass tuple is dominated: {why}")
@@ -225,7 +225,7 @@ def file_verify_pass(shipped_id, *, pr=None, author_model=None, manifest=None, d
         f"{' — ' + pr_ref if pr_ref else ''}. Author model: {author_model or 'unknown'}; "
         f"verifier: {rung.spec()} ({note}). Read the PR/diff cold, try to break it, run "
         f"its probe, and either confirm on the board or contradict with evidence. A "
-        f"contradiction escalates to {pol.get('escalate_on_contradiction', 'opus-5@high')} "
+        f"contradiction escalates to {pol.get('escalate_on_contradiction', 'opus-5-5@high')} "
         f"and is a judgment trigger. Do NOT re-implement; verify. Any writeup (verify or "
         f"judgment) belongs at foreman `reports/<this-ticket-id>_verify_wq{shipped_id}_"
         f"<slug>.md` (`_judgment_` in place of `_verify_` on an escalation) — never the "
@@ -435,7 +435,7 @@ def due(manifest, *, triggers=None, now=None, state=None, tickets_done=None):
     st = state if state is not None else load_judgment_state()
     triggers = dict(triggers or {})
     why, is_due = [], False
-    tup = router.parse_rung(pol.get("tuple", "fable-5@high"))
+    tup = router.parse_rung(pol.get("tuple", "opus-4-6@high"))
 
     last = st.get("last_run_at")
     last_dt = dt.datetime.fromisoformat(last) if last else None
@@ -470,7 +470,7 @@ def due(manifest, *, triggers=None, now=None, state=None, tickets_done=None):
 
     hardest = set(pol.get("hardest_investigation_triggers") or [])
     if fired.keys() & hardest and calibrated(manifest):
-        tup = router.parse_rung(pol.get("max_tuple", "fable-5@max"))
+        tup = router.parse_rung(pol.get("max_tuple", "opus-4-6@max"))
         why.append("hardest-investigation trigger + CAL-1 measured data present -> @max")
     elif fired.keys() & hardest:
         why.append("hardest-investigation trigger but @max reserved until CAL-1 -> @high")

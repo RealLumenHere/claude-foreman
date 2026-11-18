@@ -50,7 +50,7 @@ WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
 WQ_DB = os.environ.get("WQ_DB", "/home/lumen/agents/work-queue/queue.db")
 TIMEOUT_S = 180
 MAX_PLAN_TOKENS = 4000
-FALLBACK_RUNG = ("claude-opus-5", "medium")
+FALLBACK_RUNG = ("claude-opus-5-5", "medium")   # wq#5083 lineup
 
 
 class PlanRerun(ValueError):

@@ -58,11 +58,11 @@ def test_routing_rows_are_the_step_10_rows(m):
     # SUCCESS). standard-engineering is now the only chain still carrying local-worker@local,
     # and only behind local_standard_engineering (false by default).
     assert [r.spec() for r in m.chain("mechanical-edit")] == \
-        ["claude-sonnet-5@low"]
+        ["claude-sonnet-5-5@low"]
     assert [r.spec() for r in m.chain("probe-build")] == \
-        ["claude-sonnet-5@medium", "claude-haiku-5-5"]
+        ["claude-sonnet-5-5@medium", "claude-haiku-5-5"]
     assert [r.spec() for r in m.chain("standard-engineering")] == \
-        ["claude-sonnet-5@high", "claude-sonnet-5@medium", "claude-opus-5@medium(escalate-on-fail)"]
+        ["claude-opus-5-5@high", "claude-opus-4-8@high"]   # wq#5083
     assert all(r.model != "qwen36-local" for r in m.chain("mechanical-edit"))
     assert all(r.model != "local-worker" for r in m.chain("mechanical-edit"))
     assert all(r.model != "local-worker" for r in m.chain("probe-build"))
@@ -74,8 +74,8 @@ def test_verify_pass_local_author_always_stays_true(m):
 
 def test_route_mechanical_edit_probe_build_no_longer_return_local_worker(m):
     """wq#2583 AC: router route mechanical-edit / probe-build no longer returns local-worker."""
-    assert pick(m, "mechanical-edit") == "claude-sonnet-5@low"
-    assert pick(m, "probe-build") == "claude-sonnet-5@medium"
+    assert pick(m, "mechanical-edit") == "claude-sonnet-5-5@low"
+    assert pick(m, "probe-build") == "claude-sonnet-5-5@medium"
 
 
 # ---- cooldown (exercised via standard-engineering, the only remaining chain that can
@@ -92,7 +92,7 @@ def test_every_local_backend_cooling_falls_to_the_cloud_rung(raw, scratch):
     m = _local_enabled_manifest(raw)
     cool(scratch, *GROUP)
     rung, reasons = router.select(m, "standard-engineering")
-    assert rung.spec() == "claude-sonnet-5@high"
+    assert rung.spec() == "claude-opus-5-5@high"
     assert any("skip local-worker@local" in r and "every local-worker member is out" in r
                for r in reasons)
 
@@ -100,7 +100,7 @@ def test_every_local_backend_cooling_falls_to_the_cloud_rung(raw, scratch):
 def test_group_row_in_cooldown_is_out_by_itself(raw, scratch):
     m = _local_enabled_manifest(raw)
     cool(scratch, "local-worker")
-    assert pick(m, "standard-engineering") == "claude-sonnet-5@high"
+    assert pick(m, "standard-engineering") == "claude-opus-5-5@high"
 
 
 def test_one_live_member_keeps_the_group(raw, scratch):
@@ -113,7 +113,7 @@ def test_down_member_counts_as_out_alongside_cooling_ones(raw, scratch):
     # qwen36-local is `down` in models.yaml, so hathor + nephthys cooling empties the group
     m = _local_enabled_manifest(raw)
     cool(scratch, "hathor-llama8b", "nephthys-qwen14b")
-    assert pick(m, "standard-engineering") == "claude-sonnet-5@high"
+    assert pick(m, "standard-engineering") == "claude-opus-5-5@high"
 
 
 def test_expired_cooldown_is_ignored(raw, scratch):
@@ -126,7 +126,7 @@ def test_object_shaped_and_iso_entries_are_read(raw, scratch):
     m = _local_enabled_manifest(raw)
     (scratch / "cooldown.json").write_text(json.dumps(
         {n: {"until": "2999-01-01T00:00:00Z", "why": "hang"} for n in GROUP}))
-    assert pick(m, "standard-engineering") == "claude-sonnet-5@high"
+    assert pick(m, "standard-engineering") == "claude-opus-5-5@high"
 
 
 def test_unreadable_cooldown_file_is_no_cooldown(raw, scratch):
@@ -137,14 +137,14 @@ def test_unreadable_cooldown_file_is_no_cooldown(raw, scratch):
 
 def test_fails_walk_position_survives_a_cooled_rung(m):
     """probe-build's base chain is now cloud-only (wq#2583); fails walks it directly."""
-    assert pick(m, "probe-build", fails=0) == "claude-sonnet-5@medium"
+    assert pick(m, "probe-build", fails=0) == "claude-sonnet-5-5@medium"
     assert pick(m, "probe-build", fails=1) == "claude-haiku-5-5"
 
 
 def test_candidates_drops_cooled_rungs_by_default(m, scratch):
     cool(scratch, *GROUP)
     assert [r.spec() for r in router.candidates(m, "probe-build")] == \
-        ["claude-sonnet-5@medium", "claude-haiku-5-5"]
+        ["claude-sonnet-5-5@medium", "claude-haiku-5-5"]
     assert len(router.candidates(m, "probe-build", available_only=False)) == 2
 
 
@@ -165,7 +165,7 @@ def test_non_live_status_skips_the_rung(raw):
             row["status"] = "down"
     m = router.Manifest(raw)
     rung, reasons = router.select(m, "standard-engineering")
-    assert rung.spec() == "claude-sonnet-5@high"
+    assert rung.spec() == "claude-opus-5-5@high"
     assert any("local-worker status is 'down', not LIVE*" in r for r in reasons)
 
 
@@ -181,7 +181,7 @@ def test_live_variants_all_pass(raw):
 def test_cloud_rung_with_dead_status_is_skipped(raw):
     raw = copy.deepcopy(raw)
     for row in raw["models"]:
-        if row["id"] == "claude-sonnet-5":
+        if row["id"] == "claude-sonnet-5-5":
             row["status"] = "TOMBSTONE-CONFIRMED"
     m = router.Manifest(raw)
     assert pick(m, "probe-build", allow_local=False) == "claude-haiku-5-5"
@@ -191,11 +191,11 @@ def test_cooled_cloud_rung_is_skipped(m, scratch):
     """wq#3354: fleet-selfheal cools a non-local rung whose provider key is dead
     (object-shaped row, source=fleet-selfheal); dispatch must walk past it. Before
     wq#3354 the cooldown file was read for local rungs only, so this picked sonnet."""
-    (scratch / "cooldown.json").write_text(json.dumps({"claude-sonnet-5": {
+    (scratch / "cooldown.json").write_text(json.dumps({"claude-sonnet-5-5": {
         "until": time.time() + 900, "source": "fleet-selfheal", "reason": "401"}}))
     assert pick(m, "probe-build", allow_local=False) == "claude-haiku-5-5"
-    cool(scratch, "claude-sonnet-5", until=time.time() - 1)
-    assert pick(m, "probe-build", allow_local=False) == "claude-sonnet-5@medium"
+    cool(scratch, "claude-sonnet-5-5", until=time.time() - 1)
+    assert pick(m, "probe-build", allow_local=False) == "claude-sonnet-5-5@medium"
 
 
 def test_all_rungs_unavailable_returns_none(m, scratch):
@@ -210,7 +210,7 @@ def test_all_rungs_unavailable_returns_none(m, scratch):
 def test_standard_engineering_stays_cloud_while_the_flag_is_false(raw, m):
     assert raw["local_standard_engineering"] is False
     assert m.local_standard_engineering is False
-    assert pick(m, "standard-engineering") == "claude-sonnet-5@high"
+    assert pick(m, "standard-engineering") == "claude-opus-5-5@high"
 
 
 def test_flag_true_puts_the_local_group_in_front(raw, scratch):
@@ -219,7 +219,7 @@ def test_flag_true_puts_the_local_group_in_front(raw, scratch):
     m = router.Manifest(raw)
     assert pick(m, "standard-engineering") == "local-worker@local"
     cool(scratch, *GROUP)
-    assert pick(m, "standard-engineering") == "claude-sonnet-5@high"
+    assert pick(m, "standard-engineering") == "claude-opus-5-5@high"
     assert pick(m, "rca-investigation") == "claude-opus-5-5@high"
 
 
@@ -250,5 +250,5 @@ def _route(arch, env_extra):
 
 def test_cli_proof(scratch):
     """wq#2583 AC: router route mechanical-edit / probe-build no longer returns local-worker."""
-    assert _route("mechanical-edit", {})["model"] == "claude-sonnet-5"
-    assert _route("probe-build", {})["model"] == "claude-sonnet-5"
+    assert _route("mechanical-edit", {})["model"] == "claude-sonnet-5-5"
+    assert _route("probe-build", {})["model"] == "claude-sonnet-5-5"
