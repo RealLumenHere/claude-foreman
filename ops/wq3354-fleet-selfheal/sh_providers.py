@@ -17,7 +17,10 @@ billing-down for `disable_after_s` (600):
     with source=fleet-selfheal, refreshed each sweep while it stays down; router.py's
     availability_check skips a cooled rung in every pool (wq#3354 widened it from
     local-only), so dispatch routes to the next rung;
-  * one rotation (or top-up) ticket + aq row + page.
+  * one rotation (or top-up) ticket + aq row + page. A rotation ticket files in the
+    human lane frank-cred: the wq#3747 gate refuses rotate-provider-keys to headless
+    workers, so a build-lane ticket only ever dispatched a worker that had to block
+    (wq#4782..wq#4936).
 
 When the host answers again our cooldown entries are removed (only ours) and the
 ticket episode closes. If EVERY probed host is auth-down the problem is our own
@@ -162,6 +165,19 @@ def _write_cooldown(path, set_entries, drop_names):
     return True
 
 
+def _file_or_reuse(ctx, key, contains, title, detail, **kw):
+    """file_once, unless a ticket for this outage is already open: another detector's
+    (wq#3577 duplicated wq#3557) or our own from an earlier episode of a flapping host
+    (gemini 403 -> 429 -> 200 -> 403 filed wq#4936..wq#5089, six open at once)."""
+    dup = ctx.section("tickets").get(key) is None and ctx.out.find_open_ticket(contains)
+    if dup:
+        ctx.note(CLS, f"{key} already tracked by wq#{dup}; skip duplicate ticket")
+        ctx.section("tickets")[key] = {"id": dup, "at": int(ctx.now),
+                                       "title": f"(duplicate of wq#{dup})"}
+        return dup
+    return ctx.file_once(CLS, key, title, detail, **kw)
+
+
 def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from_config):
     p = ctx.cfg.get("providers", {})
     st = ctx.section("providers")
@@ -212,16 +228,23 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                 for m in models:
                     to_set[m] = {"until": int(ctx.now) + hold_s, "source": SOURCE,
                                  "reason": f"{host} 401/403 since {first} (wq#3354)"}
-                ctx.file_once(CLS, f"provider-auth:{host}",
-                              f"[selfheal] rotate key: {host} rejects auth "
-                              f"({int((ctx.now - first) // 60)} min)",
-                              f"LiteLLM upstream {host} has answered 401/403 for "
-                              f"{int((ctx.now - first) // 60)} min. Rungs {', '.join(models)} "
-                              f"are cooled down in backend_cooldown.json so dispatch skips "
-                              f"them. Rotate the provider key (rotate-provider-keys), "
-                              f"restart LiteLLM; fleet-selfheal re-enables the rungs on the "
-                              f"first good probe.",
-                              page="high")
+                _file_or_reuse(ctx, f"provider-auth:{host}",
+                               [f"rotate key: {host} rejects auth"],
+                               f"[selfheal] rotate key: {host} rejects auth "
+                               f"({int((ctx.now - first) // 60)} min)",
+                               f"LiteLLM upstream {host} has answered 401/403 for "
+                               f"{int((ctx.now - first) // 60)} min. Rungs "
+                               f"{', '.join(models)} are cooled down in "
+                               f"backend_cooldown.json so dispatch skips them. Physical "
+                               f"task for an attended operator: mint a new key in the "
+                               f"{host} dashboard, run python3 /home/lumen/foreman/ops/"
+                               f"wq3747-credential-rotation-safety-gate/"
+                               f"vault_rotation_backup.py rotate-provider-keys (the wq#3747 "
+                               f"gate refuses rotate-provider-keys to any headless worker "
+                               f"without it), then rotate-provider-keys and restart "
+                               f"LiteLLM. fleet-selfheal re-enables the rungs on the first "
+                               f"good probe; later flaps of {host} reuse this ticket.",
+                               lane=p.get("auth_ticket_lane", "frank-cred"), page="high")
         elif verdict == "billing":
             first = hs.setdefault("first_billing", int(ctx.now))
             if ctx.now - first >= disable_after:
@@ -229,28 +252,19 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                 for m in models:
                     to_set[m] = {"until": int(ctx.now) + hold_s, "source": SOURCE,
                                  "reason": f"{host} 402 since {first} (wq#3560)"}
-                key = f"provider-billing:{host}"
                 label = host.split(".")[-2] if host.count(".") >= 1 else host
-                dup = ctx.section("tickets").get(key) is None and \
-                    ctx.out.find_open_ticket([label, "balance"])
-                if dup:
-                    ctx.note(CLS, f"{host} already tracked by wq#{dup}; "
-                                  f"skip duplicate ticket")
-                    ctx.section("tickets")[key] = {"id": dup, "at": int(ctx.now),
-                                                   "title": f"(duplicate of wq#{dup})"}
-                else:
-                    ctx.file_once(CLS, key,
-                                  f"[selfheal] top up {host}: provider balance exhausted "
-                                  f"({int((ctx.now - first) // 60)} min)",
-                                  f"LiteLLM upstream {host} has answered 402 (insufficient "
-                                  f"balance) for {int((ctx.now - first) // 60)} min. Rungs "
-                                  f"{', '.join(models)} are cooled down in "
-                                  f"backend_cooldown.json so dispatch skips them. This is "
-                                  f"not a key problem — top up the account balance for "
-                                  f"{host} (physical task; funding tracked in wq#3557). "
-                                  f"fleet-selfheal re-enables the rungs on the first good "
-                                  f"probe.",
-                                  page="high")
+                _file_or_reuse(ctx, f"provider-billing:{host}", [label, "balance"],
+                               f"[selfheal] top up {host}: provider balance exhausted "
+                               f"({int((ctx.now - first) // 60)} min)",
+                               f"LiteLLM upstream {host} has answered 402 (insufficient "
+                               f"balance) for {int((ctx.now - first) // 60)} min. Rungs "
+                               f"{', '.join(models)} are cooled down in "
+                               f"backend_cooldown.json so dispatch skips them. This is "
+                               f"not a key problem — top up the account balance for "
+                               f"{host} (physical task; funding tracked in wq#3557). "
+                               f"fleet-selfheal re-enables the rungs on the first good "
+                               f"probe.",
+                               page="high")
         elif verdict == "quota":
             hits = [t for t in hs.get("quota_hits", []) if ctx.now - t < QUOTA_HIT_WINDOW_S]
             hits.append(int(ctx.now))

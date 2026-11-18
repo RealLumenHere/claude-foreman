@@ -138,6 +138,48 @@ def test_provider_401_for_ten_minutes_cools_its_rungs_then_recovery_reenables(ma
     assert "provider-auth:api.deepseek.com" not in state["tickets"]
 
 
+def test_provider_auth_ticket_goes_to_the_human_lane_with_the_operator_steps(
+        make_ctx, tmp_path):
+    """wq#4936: the wq#3747 gate refuses rotate-provider-keys to headless workers, so a
+    build-lane rotation ticket only dispatched a worker that had to block."""
+    cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_401, "api.z.ai": (200, "")}
+    _psweep(make_ctx(cfg, state, now=t0), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _psweep(ctx, bad)
+    [t] = ctx.out.tickets
+    assert t["lane"] == "frank-cred"
+    assert "vault_rotation_backup.py rotate-provider-keys" in t["detail"]
+
+
+def test_a_flapping_auth_host_reuses_its_open_ticket_across_episodes(make_ctx, tmp_path):
+    """gemini went 403 -> 429 -> 200 -> 403 for days; every 200 closed the episode and
+    the next 403 filed a fresh ticket (wq#4936, 4937, 4938, 4939, 5033, 5089 all open on
+    2026-11-18)."""
+    cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
+    bad = {"api.deepseek.com": PROVIDER_401, "api.z.ai": (200, "")}
+    good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
+    _psweep(make_ctx(cfg, state, now=t0), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _psweep(ctx, bad)
+    [t] = ctx.out.tickets
+    open_tickets = [("9001", "open", t["title"])]
+    _psweep(make_ctx(cfg, state, now=t0 + 900, open_tickets=open_tickets), good)
+    assert "provider-auth:api.deepseek.com" not in state["tickets"]
+    _psweep(make_ctx(cfg, state, now=t0 + 1800, open_tickets=open_tickets), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 2400, open_tickets=open_tickets)
+    _psweep(ctx, bad)                                           # second episode
+    assert ctx.out.tickets == []
+    assert state["tickets"]["provider-auth:api.deepseek.com"]["id"] == "9001"
+    assert json.loads((tmp_path / "cooldown.json").read_text())["deepseek-v4-flash"]
+    open_tickets = [("9001", "done", t["title"])]               # Frank closed it
+    _psweep(make_ctx(cfg, state, now=t0 + 2700, open_tickets=open_tickets), good)
+    _psweep(make_ctx(cfg, state, now=t0 + 3600, open_tickets=open_tickets), bad)
+    ctx = make_ctx(cfg, state, now=t0 + 4200, open_tickets=open_tickets)
+    _psweep(ctx, bad)                                           # third episode files anew
+    assert len(ctx.out.tickets) == 1
+
+
 def test_a_flap_shorter_than_ten_minutes_never_disables(make_ctx, tmp_path):
     cfg, state, t0 = _pcfg(tmp_path), {}, 100_000
     _psweep(make_ctx(cfg, state, now=t0), {"api.deepseek.com": PROVIDER_401,
