@@ -41,6 +41,7 @@ NODE=/usr/bin/node
 # 512 KiB: above what Claude Code itself keeps inline (25k tokens; text over 50k chars goes to a file,
 # code.claude.com/docs/en/mcp, 2026-11-13), so normal results are untouched; a screenshot still fits.
 MAX_RESULT_BYTES=524288
+PINS_FILE=/home/lumen/docs/security/mcp-tool-pins-2026-11.json
 
 # ---------------------------------------------------------------- pins: gitea
 GITEA_VER=1.8.1
@@ -158,6 +159,7 @@ exec $GPY -I $GUARD --name gitea \\
   --allow $GITEA_ALLOW \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
+  --pins $PINS_FILE \\
 $(for a in "${GITEA_ARG_ALLOW[@]}"; do printf "  --arg-allow '%s' \\\\\n" "$a"; done; printf '  --') $ROOT/gitea-mcp/$GITEA_VER/gitea-mcp -t stdio
 EOF
 }
@@ -177,6 +179,7 @@ exec $GPY -I $GUARD --name fleet-memory \\
   --allow $DBHUB_ALLOW \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES \\
+  --pins $PINS_FILE \\
   -- $NODE $ROOT/dbhub/$DBHUB_VER/node_modules/@bytebase/dbhub/dist/index.js
 EOF
 }
@@ -195,6 +198,7 @@ exec $GPY -I $GUARD --name fleet-state \\
   --allow $FLEET_STATE_ALLOW \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES \\
+  --pins $PINS_FILE \\
   -- $NODE $ROOT/dbhub/$DBHUB_VER/node_modules/@bytebase/dbhub/dist/index.js --config=$ROOT/dbhub/$DBHUB_VER/fleet-state.toml
 EOF
 }
@@ -211,6 +215,7 @@ exec $GPY -I $GUARD --name docker \\
   --allow $DOCKER_ALLOW \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
+  --pins $PINS_FILE \\
   -- $ROOT/docker-mcp/$DOCKER_MCP_VER/venv/bin/mcp-server-docker
 EOF
 }
@@ -231,6 +236,7 @@ exec $GPY -I $GUARD --name grafana \\
   --allow $GRAFANA_ALLOW \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
+  --pins $PINS_FILE \\
   -- $ROOT/mcp-grafana/$GRAFANA_VER/mcp-grafana -t stdio --disable-write --enabled-tools search,datasource,prometheus,alerting,dashboard,folder,annotations,navigation
 EOF
 }
@@ -248,6 +254,7 @@ exec $GPY -I $GUARD --name playwright --egress-proxy \\
   --http-url-arg browser_navigate:url --http-url-arg browser_tabs:url \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
+  --pins $PINS_FILE \\
   -- $NODE $ROOT/playwright-mcp/$PW_VER/node_modules/@playwright/mcp/cli.js \\
   --headless --isolated --browser chromium --executable-path $PW_CHROME \\
   --proxy-server '{EGRESS_PROXY}' --proxy-bypass '<-loopback>' --block-service-workers \\
@@ -326,6 +333,7 @@ verify_common() {
   vfile "$SRC/../wq4206-stealth-browser-mcp/lumen_stealth_guard.py" "$GDIR/lumen_stealth_guard.py"
   "$GPY" -I -c 'import sys, fastmcp, mcp; sys.exit(fastmcp.__version__ != "2.11.2")' 2>/dev/null \
     || _vmiss "guard venv cannot import fastmcp==2.11.2 + mcp: $GDIR/venv"
+  [ -r "$PINS_FILE" ] || _vmiss "pins file missing or unreadable: $PINS_FILE"
 }
 
 verify_gitea() {
