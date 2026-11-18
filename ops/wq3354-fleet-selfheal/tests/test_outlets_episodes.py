@@ -69,6 +69,27 @@ def test_resolve_closes_the_episodes_aq_row(make_ctx):
     assert ctx.out.pages == [("low", "fleet-selfheal: node-offline:ptah cleared")]
 
 
+def test_resolve_notes_the_clear_on_the_still_open_ticket(make_ctx):
+    """wq#4940: the crash-loop cleared at boot+11min; the ticket said nothing for 6 days."""
+    ctx = make_ctx({})
+    ctx.file_once("crashloop", "crashloop:cloudflared-mcp.service", "t", "d")
+    ctx.resolve("crashloop", "crashloop:cloudflared-mcp.service", "no restarts in 300s")
+    assert ctx.out.notes == [("9001", "fleet-selfheal: episode cleared "
+                              "1970-01-12 13:46:40Z: no restarts in 300s")]
+    # no ticket id recorded (wq refused, or "?" from an unparsable reply): no note
+    state = {"tickets": {"a": {"aq": "5"}, "b": {"id": "?"}}}
+    ctx = make_ctx({}, state)
+    ctx.resolve("c", "a")
+    ctx.resolve("c", "b")
+    assert ctx.out.notes == []
+
+
+def test_note_ticket_appends_through_wq_note():
+    out, ran = outlets(lambda a: Proc(""))
+    out.note_ticket("4940", "cleared")
+    assert ran[-1][-4:] == ["wq", "note", "4940", "cleared"]
+
+
 def test_resolve_without_msg_still_closes_the_row_and_dry_run_closes_nothing(make_ctx):
     ctx = make_ctx({})
     ctx.file_once("providers", "provider-gateway-key", "t", "d")
@@ -79,3 +100,4 @@ def test_resolve_without_msg_still_closes_the_row_and_dry_run_closes_nothing(mak
     ctx.resolve("c", "k")
     ctx.clear_alert("a", "n")
     assert ctx.out.resolved == [] and state["alerts"] == {"a": "6"}
+    assert ctx.out.notes == []

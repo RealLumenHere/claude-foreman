@@ -10,6 +10,7 @@ Ticket dedup is per episode: `ctx.file_once(key, ...)` files at most one ticket 
 until the class calls `ctx.resolve(key)` because the condition cleared. A failure that
 persists for a week produces one ticket, not 10,080.
 """
+import datetime
 import fnmatch
 import json
 import os
@@ -154,6 +155,9 @@ class Outlets:
     def resolve_alert(self, rid, note):
         self.runner([self.aq, "resolve", str(rid), note], timeout=15)
 
+    def note_ticket(self, tid, text):
+        self.runner(as_lumen([self.wq, "note", str(tid), text]), timeout=30)
+
     def page(self, priority, title, msg):
         self.runner([self.ntfy, "-t", NTFY_TOPIC, "-p", priority, "-T", title,
                      "--quiet", msg], timeout=15)
@@ -229,13 +233,21 @@ class Ctx:
 
     def resolve(self, cls, key, msg=None):
         """The episode is over: forget the ticket so the next one can file, and close
-        its aq row (wq#3734: rows used to stay open forever after the clear)."""
+        its aq row (wq#3734: rows used to stay open forever after the clear). The ticket
+        stays open for a human, but gets a note saying when it cleared (wq#4940: a
+        boot-time crash-loop cleared in 11 min, yet its ticket reached a worker six days
+        later with nothing saying so)."""
         rec = self.section("tickets").pop(key, None)
         if rec is not None:
             self.note(cls, f"resolved {key} (was wq#{rec.get('id')})")
             if not self.dry_run:
                 if rec.get("aq"):
                     self.out.resolve_alert(rec["aq"], msg or f"{key} cleared")
+                if str(rec.get("id") or "?").isdigit():
+                    at = datetime.datetime.fromtimestamp(
+                        self.now, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+                    self.out.note_ticket(rec["id"], f"fleet-selfheal: episode cleared "
+                                         f"{at}: {msg or key + ' cleared'}")
                 if msg:
                     self.out.page("low", f"fleet-selfheal: {key} cleared", msg)
 

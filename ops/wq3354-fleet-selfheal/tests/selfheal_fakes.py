@@ -33,6 +33,7 @@ class FakeSystemd:
 class FakeOutlets:
     def __init__(self, open_tickets=None):
         self.tickets, self.alerts, self.pages, self.resolved = [], [], [], []
+        self.notes = []
         self.open_tickets = list(open_tickets or ())  # [(id, status, title), ...]
 
     def file_ticket(self, title, detail, lane, pri):
@@ -45,6 +46,9 @@ class FakeOutlets:
 
     def resolve_alert(self, rid, note):
         self.resolved.append(rid)
+
+    def note_ticket(self, tid, text):
+        self.notes.append((tid, text))
 
     def page(self, priority, title, msg):
         self.pages.append((priority, title))
