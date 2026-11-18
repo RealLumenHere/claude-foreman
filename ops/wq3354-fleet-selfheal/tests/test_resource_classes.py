@@ -131,11 +131,22 @@ def test_provider_401_for_ten_minutes_cools_its_rungs_then_recovery_reenables(ma
     assert "glm-5.3" not in data and data["hathor-llama8b"] == 1e12
     [t] = ctx.out.tickets
     assert t["title"].startswith("[selfheal] rotate key: " + "api.deepseek.com")
+    assert t["lane"] == "frank-cred"                            # wq#4937: never build
+    assert "vault_rotation_backup.py" in t["detail"]
     good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
     ctx = make_ctx(cfg, state, now=t0 + 900)
     _psweep(ctx, good)
     assert json.loads(cd.read_text()) == {"hathor-llama8b": 1e12}
     assert "provider-auth:api.deepseek.com" not in state["tickets"]
+
+
+def test_provider_ticket_lanes_are_ones_the_dispatcher_never_hands_a_worker():
+    src = os.path.join(os.path.dirname(__file__), "..", "..", "..",
+                       "dispatcher", "foreman_dispatcher.py")
+    with open(src) as f:
+        line = next(l for l in f if l.startswith("HUMAN_LANES = "))
+    assert f'"{sh_providers.AUTH_LANE}"' in line
+    assert f'"{sh_providers.BILLING_LANE}"' in line
 
 
 def test_a_flap_shorter_than_ten_minutes_never_disables(make_ctx, tmp_path):
@@ -169,6 +180,7 @@ def test_provider_402_for_ten_minutes_cools_its_rungs_then_recovery_reenables(ma
     [t] = ctx.out.tickets
     assert t["title"].startswith("[selfheal] top up api.deepseek.com")
     assert "rotate" not in t["title"].lower()
+    assert t["lane"] == "frank-funding"
     good = {"api.deepseek.com": (200, ""), "api.z.ai": (200, "")}
     ctx = make_ctx(cfg, state, now=t0 + 900)
     _psweep(ctx, good)

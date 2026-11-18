@@ -17,7 +17,8 @@ billing-down for `disable_after_s` (600):
     with source=fleet-selfheal, refreshed each sweep while it stays down; router.py's
     availability_check skips a cooled rung in every pool (wq#3354 widened it from
     local-only), so dispatch routes to the next rung;
-  * one rotation (or top-up) ticket + aq row + page.
+  * one rotation (or top-up) ticket + aq row + page, on a human lane (frank-cred /
+    frank-funding), never the build lane: no headless worker can do either.
 
 When the host answers again our cooldown entries are removed (only ours) and the
 ticket episode closes. If EVERY probed host is auth-down the problem is our own
@@ -56,6 +57,12 @@ SKIP_SUBSTRINGS = ("embed", "rerank", "whisper", "tts")
 GATEWAY_MARKERS = ("invalid proxy server token", "proxy server token", "no api key passed in")
 QUOTA_MARKERS = ("quotaMetric", "RESOURCE_EXHAUSTED")
 SOURCE = "fleet-selfheal"
+# Minting a key or topping up a balance is Frank's alone, and the wq#3747 gate refuses
+# rotate-* to any session without an attended Vault backup marker. On the build lane these
+# tickets went to headless fworkers that could only block them (wq#4782..wq#4937), so they
+# go to human lanes the dispatcher never hands a worker (foreman_dispatcher.HUMAN_LANES).
+AUTH_LANE = "frank-cred"
+BILLING_LANE = "frank-funding"
 MIN_COOLDOWN_S = 30
 MAX_COOLDOWN_S = 6 * 3600
 QUOTA_HIT_WINDOW_S = 24 * 3600
@@ -218,10 +225,13 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                               f"LiteLLM upstream {host} has answered 401/403 for "
                               f"{int((ctx.now - first) // 60)} min. Rungs {', '.join(models)} "
                               f"are cooled down in backend_cooldown.json so dispatch skips "
-                              f"them. Rotate the provider key (rotate-provider-keys), "
-                              f"restart LiteLLM; fleet-selfheal re-enables the rungs on the "
-                              f"first good probe.",
-                              page="high")
+                              f"them. Physical task for an attended operator: mint a new "
+                              f"key in the provider's dashboard, run "
+                              f"ops/wq3747-credential-rotation-safety-gate/"
+                              f"vault_rotation_backup.py (Vault backup marker), then "
+                              f"rotate-provider-keys and restart LiteLLM; fleet-selfheal "
+                              f"re-enables the rungs on the first good probe.",
+                              lane=AUTH_LANE, page="high")
         elif verdict == "billing":
             first = hs.setdefault("first_billing", int(ctx.now))
             if ctx.now - first >= disable_after:
@@ -250,7 +260,7 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                                   f"{host} (physical task; funding tracked in wq#3557). "
                                   f"fleet-selfheal re-enables the rungs on the first good "
                                   f"probe.",
-                                  page="high")
+                                  lane=BILLING_LANE, page="high")
         elif verdict == "quota":
             hits = [t for t in hs.get("quota_hits", []) if ctx.now - t < QUOTA_HIT_WINDOW_S]
             hits.append(int(ctx.now))
