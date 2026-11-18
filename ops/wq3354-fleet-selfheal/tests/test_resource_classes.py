@@ -110,6 +110,72 @@ def test_classify_tells_provider_auth_from_gateway_auth():
     assert sh_providers.classify(*PROVIDER_429_QUOTA) == "quota"
     assert sh_providers.classify(None, "timed out") == "error"
     assert sh_providers.classify(500, "upstream error") == "error"
+    assert sh_providers.classify(*ANTHROPIC_404_MODEL) == "ok"
+    assert sh_providers.classify(404, '{"detail":"Not Found"}') == "error"
+    assert sh_providers.classify(*ANTHROPIC_400_CREDIT) == "billing"
+    assert sh_providers.classify(400, "litellm.BadRequestError: bad params") == "error"
+
+
+ANTHROPIC_HOSTS = {"anthropic": ["anthropic/*", "lumen/claude-sonnet", "lumen/claude-haiku"]}
+ANTHROPIC_401 = (401, '{"error": {"message": "litellm.AuthenticationError: '
+                      'AnthropicException - {\\"type\\":\\"error\\",\\"error\\":{\\"type\\":'
+                      '\\"authentication_error\\",\\"message\\":\\"invalid x-api-key\\"}}"}}')
+ANTHROPIC_404_MODEL = (404, '{"error": {"message": "litellm.NotFoundError: AnthropicException '
+                            '- {\\"type\\":\\"error\\",\\"error\\":{\\"type\\":'
+                            '\\"not_found_error\\",\\"message\\":\\"model: *\\"}}"}}')
+ANTHROPIC_400_CREDIT = (400, '{"error": {"message": "litellm.BadRequestError: '
+                             'AnthropicException - Your credit balance is too low to access '
+                             'the Anthropic API."}}')
+ANTHROPIC_529 = (529, '{"error": {"message": "AnthropicException - {\\"type\\":\\"error\\",'
+                      '\\"error\\":{\\"type\\":\\"overloaded_error\\"}}"}}')
+
+
+def _asweep(ctx, answer):
+    probed = []
+
+    def prober(url, key, model):
+        probed.append(model)
+        return answer
+    sh_providers.sweep(ctx, prober=prober, key_reader=lambda p: "k",
+                       hosts_reader=lambda p: ANTHROPIC_HOSTS)
+    return probed
+
+
+def test_wildcard_probe_404_model_not_found_resolves_the_auth_episode(make_ctx, tmp_path):
+    """wq#5003: the anthropic probe is `anthropic/*` (upstream model `*`). It answered 401
+    while the key was bad; once the key was accepted it answered 404 model-not-found, read
+    as 'error', and the episode sat open three days without resolving or logging why."""
+    cfg = _pcfg(tmp_path)
+    cd = tmp_path / "cooldown.json"
+    state, t0 = {}, 100_000
+    assert _asweep(make_ctx(cfg, state, now=t0), ANTHROPIC_401) == ["anthropic/*"]
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _asweep(ctx, ANTHROPIC_401)
+    assert set(json.loads(cd.read_text())) == set(ANTHROPIC_HOSTS["anthropic"])
+    [t] = ctx.out.tickets
+    assert "rotate key: anthropic" in t["title"]
+
+    ctx = make_ctx(cfg, state, now=t0 + 900)
+    _asweep(ctx, ANTHROPIC_529)                                  # transient: stays open
+    assert state["providers"]["hosts"]["anthropic"].get("first_auth") == t0
+    assert any("anthropic answered 529 (overloaded_error)" in a for a in ctx.actions)
+
+    ctx = make_ctx(cfg, state, now=t0 + 1200)
+    _asweep(ctx, ANTHROPIC_404_MODEL)
+    assert json.loads(cd.read_text()) == {}
+    assert "provider-auth:anthropic" not in state["tickets"]
+    assert "first_auth" not in state["providers"]["hosts"]["anthropic"]
+
+
+def test_anthropic_400_credit_too_low_is_a_billing_outage(make_ctx, tmp_path):
+    cfg = _pcfg(tmp_path)
+    state, t0 = {}, 100_000
+    _asweep(make_ctx(cfg, state, now=t0), ANTHROPIC_400_CREDIT)
+    ctx = make_ctx(cfg, state, now=t0 + 600)
+    _asweep(ctx, ANTHROPIC_400_CREDIT)
+    [t] = ctx.out.tickets
+    assert t["title"].startswith("[selfheal] top up anthropic")
+    assert "lumen/claude-haiku" in json.loads((tmp_path / "cooldown.json").read_text())
 
 
 def test_provider_401_for_ten_minutes_cools_its_rungs_then_recovery_reenables(make_ctx, tmp_path):

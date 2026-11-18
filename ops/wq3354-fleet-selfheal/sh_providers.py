@@ -45,6 +45,15 @@ A 429 with no quota markers is a generic RATE_LIMITED: a short fixed backoff, ne
 ticket. Both cooldowns are stored as an absolute `until` epoch, so they self-expire the
 next time router.py checks them — unlike auth/billing, nothing here needs to persist
 until a human rotates a key or tops up a balance.
+
+The probe model is the host's first model_name, which for a wildcard route is the
+literal pattern (`anthropic/*`), so upstream sees model `*`. That is a free auth check:
+the provider checks the key first (wq#5003's episode answered 401 to it for 11 h), so a
+provider 404 "model not found" means the key was ACCEPTED and counts as ok. Anthropic
+reports an empty prepaid balance as a 400 "credit balance is too low", not a 402, and
+that counts as billing. Any other answer on a host with an open episode is noted with
+its status and provider error type: from 2026-11-15 18:47 UTC the anthropic episode sat
+three days on unlogged 'error' verdicts, neither resolving nor refreshing its cooldown.
 """
 import collections
 import json
@@ -59,6 +68,8 @@ CLS = "providers"
 SKIP_SUBSTRINGS = ("embed", "rerank", "whisper", "tts")
 GATEWAY_MARKERS = ("invalid proxy server token", "proxy server token", "no api key passed in")
 QUOTA_MARKERS = ("quotaMetric", "RESOURCE_EXHAUSTED")
+MODEL_NOT_FOUND_MARKERS = ("not_found_error", "notfounderror")
+BILLING_400_MARKERS = ("credit balance is too low",)
 SOURCE = "fleet-selfheal"
 MIN_COOLDOWN_S = 30
 MAX_COOLDOWN_S = 6 * 3600
@@ -95,15 +106,18 @@ def classify(status, body):
     """'ok' | 'auth' (provider rejected the key) | 'billing' (provider balance
     exhausted) | 'quota' (provider-side rate/quota cap, e.g. RESOURCE_EXHAUSTED —
     cools down and clears on its own, no key problem) | 'rate_limited' (generic 429,
-    short backoff, never a ticket) | 'gateway-auth' | 'error' (timeouts, 5xx)."""
+    short backoff, never a ticket) | 'gateway-auth' | 'error' (timeouts, 5xx).
+    A provider 404 model-not-found is 'ok': the key got past auth (wildcard probe)."""
+    low = (body or "").lower()
     if status is not None and 200 <= status < 300:
         return "ok"
-    if status == 402:
+    if status == 404 and any(m in low for m in MODEL_NOT_FOUND_MARKERS):
+        return "ok"
+    if status == 402 or (status == 400 and any(m in low for m in BILLING_400_MARKERS)):
         return "billing"
     if status == 429:
         return "quota" if any(m in (body or "") for m in QUOTA_MARKERS) else "rate_limited"
     if status in (401, 403):
-        low = (body or "").lower()
         return "gateway-auth" if any(g in low for g in GATEWAY_MARKERS) else "auth"
     return "error"
 
@@ -311,7 +325,14 @@ def sweep(ctx, prober=probe, key_reader=read_master_key, hosts_reader=hosts_from
                 to_drop.extend(models)
                 ctx.resolve(CLS, f"provider-quota:{host}", f"{host} answers again; "
                             f"rungs {', '.join(models)} re-enabled.")
-        # 'error' (timeouts, 5xx) is not a key problem: leave the episode as is.
+        elif hs.get("first_auth") or hs.get("first_billing"):
+            # 'error' (timeouts, 5xx) is not a key problem: leave the episode as is,
+            # but say what the host answered so a stuck episode is diagnosable.
+            status, body = probed[host]
+            etype = re.search(r"\b([a-z]+(?:_[a-z]+)*_error)\b", body or "")
+            ctx.note(CLS, f"{host} answered {status} "
+                          f"({etype.group(1) if etype else 'no provider error type'}); "
+                          f"neither auth nor ok, episode stays open")
     if to_set or to_drop:
         ctx.act(CLS, f"cooldown set={sorted(to_set)} drop={sorted(to_drop)}",
                 _write_cooldown, cooldown_path, to_set, to_drop)
