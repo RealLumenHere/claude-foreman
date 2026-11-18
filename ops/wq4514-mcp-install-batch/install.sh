@@ -325,6 +325,10 @@ v_binary() { # PATH SHA256
 v_secret_file() { # PATH
   [ -s "$1" ] && [ "$(stat -c %a "$1")" = 600 ] || _vmiss "secret file missing, empty or not 0600: $1"
 }
+v_launcher_pins() { # LAUNCHER_PATH: wq#4958 — deployed launcher passes --pins to the guard
+  grep -qF -- "--pins $PINS_FILE" "$1" 2>/dev/null \
+    || _vmiss "launcher missing --pins $PINS_FILE: $1"
+}
 
 verify_common() {
   vfile "$SRC/lumen_mcp_guard.py" "$GUARD"
@@ -341,6 +345,7 @@ verify_gitea() {
   [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   v_binary "$d/gitea-mcp" "$GITEA_BIN_SHA"
   vgen "$d/launch.sh" emit_launcher_gitea
+  v_launcher_pins "$d/launch.sh"
   v_secret_file "$GITEA_TOKEN"
   v_registered gitea "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$GITEA_ALLOW")" get_gitea_mcp_server_version '{}'
@@ -354,6 +359,7 @@ verify_postgres() {
   [ "$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' "$d/node_modules/@bytebase/dbhub/package.json" 2>/dev/null | head -1)" = "$DBHUB_VER" ] \
     || _vmiss "dbhub $DBHUB_VER not installed in $d"
   vgen "$d/launch.sh" emit_launcher_postgres
+  v_launcher_pins "$d/launch.sh"
   v_secret_file "$DB_PW"
   v_registered fleet-memory "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$DBHUB_ALLOW")" execute_sql '{"sql":"SELECT count(*) FROM memory_events"}'
@@ -366,6 +372,7 @@ verify_fleet_state() {
     || _vmiss "dbhub $DBHUB_VER not installed in $d (shared with fleet-memory)"
   vfile "$SRC/fleet-state.toml" "$d/fleet-state.toml"
   vgen "$d/launch-fleet-state.sh" emit_launcher_fleet_state
+  v_launcher_pins "$d/launch-fleet-state.sh"
   [ -s "$FLEET_STATE_DB" ] || _vmiss "fleet-state source db missing: $FLEET_STATE_DB"
   v_registered fleet-state "$d/launch-fleet-state.sh"
   v_launcher_lists "$d/launch-fleet-state.sh" "$(n_items "$FLEET_STATE_ALLOW")" execute_sql '{"sql":"SELECT count(*) FROM state_facts WHERE valid_to IS NULL"}'
@@ -378,6 +385,7 @@ verify_docker() {
   "$d/venv/bin/python" -c 'import importlib.metadata as m, sys; sys.exit(m.version("mcp-server-docker") != sys.argv[1])' "$DOCKER_MCP_VER" 2>/dev/null \
     || _vmiss "mcp-server-docker version in $d/venv is not $DOCKER_MCP_VER"
   vgen "$d/launch.sh" emit_launcher_docker
+  v_launcher_pins "$d/launch.sh"
   v_registered docker "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$DOCKER_ALLOW")" list_containers '{}'
 }
@@ -387,6 +395,7 @@ verify_grafana() {
   [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   v_binary "$d/mcp-grafana" "$GRAFANA_BIN_SHA"
   vgen "$d/launch.sh" emit_launcher_grafana
+  v_launcher_pins "$d/launch.sh"
   v_registered grafana "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$GRAFANA_ALLOW")" list_datasources '{}'
 }
@@ -403,6 +412,7 @@ verify_playwright() {
     _vmiss "pinned Chrome missing or aborts with its sandbox on (AppArmor userns profile from wq#4206 not loaded?): $PW_CHROME"
   fi
   vgen "$d/launch.sh" emit_launcher_playwright
+  v_launcher_pins "$d/launch.sh"
   v_registered playwright "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$PW_ALLOW")" browser_tabs '{"action":"list"}'
 }
