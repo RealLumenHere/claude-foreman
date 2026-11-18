@@ -412,6 +412,21 @@ nodes:                  # CLASS 6
        itself unreachable there is no remote power read or cycle path, so recovery is
        physical (wq#4845 [PHYSICAL]). Live always-on node: a real page, never
        nodes.ignore/sleepers."
+    nun1: "wq#5000 (2026-11-14 page, LastSeen 21:10Z; worked 2026-11-18): first page for a
+       node commissioned the day before (nun1.lan_ip/tailscale_ip/ssh_user facts since
+       2026-11-13, hardware/role since 2026-11-14), so the drop fell inside bring-up, and
+       it SELF-RESOLVED: lumen_state nun1.status/availability=ONLINE since 2026-11-17
+       [conf 0.96], and a live TCP reprobe from lumen 2026-11-18 found :22 and :11434
+       (Ollama) open on both 100.122.44.81 and 192.168.8.150. nun1 is the BC-250 headless
+       inference node (Ollama Vulkan, OLLAMA_IGPU_ENABLE=1) meant to run 24/7, with no
+       power_policy or idle timer on record, so it goes in neither nodes.ignore nor
+       nodes.sleepers and a dark nun1 stays a real page. Known trap (nun1.status): shutdown
+       hangs because amdgpu blocks ACPI S5, so a reboot or poweroff can leave it dark and
+       hung until someone power-cycles it by hand. It has no smart plug or power facts, and
+       BUILD-lane `fleet-exec run nun1` gets DENY grant:grant_missing_env (ISSUE-LOG #192),
+       so there is no remote fix. Next page on nun1: check whether a reboot or shutdown came
+       just before LastSeen. If one did, it is that hang and needs a physical power cycle
+       ([frank-hw]); if not, it is a new fault and needs a fresh look."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
