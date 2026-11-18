@@ -84,3 +84,7 @@ runtime/
 
 # wq#2575: cron deadman runtime state, not source
 /ops/wq1184-gatus-health-checks/deadman_state.json
+
+# wq#4927: agent injection benchmark generated results
+/security/agent_injection_bench/results.json
+/security/agent_injection_bench/results.md
