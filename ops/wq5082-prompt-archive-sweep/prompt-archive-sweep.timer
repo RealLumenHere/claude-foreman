@@ -1,0 +1,12 @@
+[Unit]
+Description=Run prompt-archive-sweep every 2 min (wq#5082)
+Requires=prompt-archive-sweep.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

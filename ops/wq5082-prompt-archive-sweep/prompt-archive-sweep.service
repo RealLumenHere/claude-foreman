@@ -1,0 +1,15 @@
+[Unit]
+Description=Archive fleet-intel/prompts/wq<N>-*.md once wq#N is done (wq#5082)
+Documentation=file:///home/lumen/foreman/ops/wq5082-prompt-archive-sweep/README.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=lumen
+Group=lumen
+WorkingDirectory=/home/lumen
+# Only side effect: rename inside /home/lumen/fleet-intel/prompts -> prompts/_archive. queue.db read-only.
+ExecStart=/usr/bin/python3 /home/lumen/bin/prompt-archive-sweep
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+TimeoutStartSec=60
+Nice=10
