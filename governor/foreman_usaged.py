@@ -99,6 +99,30 @@ def refresh_token():
         return False
 
 
+_UA_CACHE = []
+
+
+def user_agent():
+    """wq#5085: /api/oauth/usage 429s every request carrying the stdlib
+    Python-urllib User-Agent (and the claude-cli/<ver> one) before it ever looks
+    at the bearer, so a dead token hid behind a 31-day "rate limit" and the 401
+    branch below (which triggers the refresh) never ran. A claude-code/<ver>
+    agent gets a real auth answer. Version comes from the installed CLI, cached
+    for the process lifetime; any failure falls back to a fixed string."""
+    if not _UA_CACHE:
+        ver = "unknown"
+        try:
+            r = subprocess.run([CLAUDE_BIN, "--version"], capture_output=True,
+                               text=True, timeout=15)
+            tok = (r.stdout or "").split()
+            if r.returncode == 0 and tok:
+                ver = tok[0]
+        except (subprocess.SubprocessError, OSError):
+            pass
+        _UA_CACHE.append(f"claude-code/{ver}")
+    return _UA_CACHE[0]
+
+
 def fetch_primary():
     """Returns (ok, payload_or_None, err_str_or_None)."""
     for attempt in (1, 2):
@@ -108,7 +132,8 @@ def fetch_primary():
             return False, None, f"credentials unreadable: {e}"
         req = urllib.request.Request(
             USAGE_URL,
-            headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20"},
+            headers={"Authorization": f"Bearer {token}", "anthropic-beta": "oauth-2025-04-20",
+                     "User-Agent": user_agent()},
         )
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:

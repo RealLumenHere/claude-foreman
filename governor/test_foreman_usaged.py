@@ -200,3 +200,35 @@ def test_aq_open_id_reads_scratch_db(monkeypatch, tmp_path):
     assert usaged.aq_open_id() == 9
     monkeypatch.setattr(usaged, "AQ_DB", str(tmp_path / "missing.db"))
     assert usaged.aq_open_id() is None
+
+
+def test_primary_request_sends_claude_code_user_agent(monkeypatch):
+    """wq#5085: the default Python-urllib UA is 429'd before auth is checked."""
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, *a):
+            return b"{}"
+
+    def fake_urlopen(req, timeout=None):
+        seen["ua"] = req.get_header("User-agent")
+        return _Resp()
+
+    monkeypatch.setattr(usaged, "read_bearer", lambda: "x")
+    monkeypatch.setattr(usaged, "_UA_CACHE", ["claude-code/9.9.9"])
+    monkeypatch.setattr(usaged.urllib.request, "urlopen", fake_urlopen)
+    ok, payload, err = usaged.fetch_primary()
+    assert ok and err is None
+    assert seen["ua"] == "claude-code/9.9.9"
+
+
+def test_user_agent_falls_back_when_cli_missing(monkeypatch):
+    monkeypatch.setattr(usaged, "_UA_CACHE", [])
+    monkeypatch.setattr(usaged, "CLAUDE_BIN", "/nonexistent/claude")
+    assert usaged.user_agent() == "claude-code/unknown"
