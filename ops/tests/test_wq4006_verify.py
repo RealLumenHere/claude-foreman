@@ -11,6 +11,7 @@ a temp path; the real ~/.claude.json and ~/re are never touched.
 """
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -23,10 +24,14 @@ with open(os.path.join(BUNDLE, "rea-guard")) as _fh:
     REA_GUARD = _fh.read()
 with open(os.path.join(BUNDLE, "HOSTILE_INPUT_POLICY.md")) as _fh:
     POLICY = _fh.read()
+with open(os.path.join(BUNDLE, "rea-mcp-guarded")) as _fh:
+    REA_LAUNCHER = _fh.read()
+with open(os.path.join(BUNDLE, "rea-allow.txt")) as _fh:
+    REA_ALLOW = _fh.read()
 
 GOOD_MCP_JSON = """{
   "mcpServers": {
-    "rea": {"command": "/x/re/bin/rea-guard", "args": ["mcp"]},
+    "rea": {"command": "/x/re/bin/rea-mcp-guarded", "args": []},
     "rea-maksoor": {"command": "ssh", "args": ["maksoor", "rea", "mcp"]}
   }
 }
@@ -40,12 +45,18 @@ GOOD_PROVENANCE = json.dumps({
 
 def _populate_project_dir(project_dir, *, mcp_json=GOOD_MCP_JSON,
                            provenance=GOOD_PROVENANCE, guard=REA_GUARD,
-                           policy=POLICY):
+                           policy=POLICY, launcher=REA_LAUNCHER, allow=REA_ALLOW):
     os.makedirs(os.path.join(project_dir, "bin"), exist_ok=True)
     os.makedirs(os.path.join(project_dir, "common", "tools"), exist_ok=True)
     if guard is not None:
         with open(os.path.join(project_dir, "bin", "rea-guard"), "w") as fh:
             fh.write(guard)
+    if launcher is not None:
+        with open(os.path.join(project_dir, "bin", "rea-mcp-guarded"), "w") as fh:
+            fh.write(launcher)
+    if allow is not None:
+        with open(os.path.join(project_dir, "bin", "rea-allow.txt"), "w") as fh:
+            fh.write(allow)
     if policy is not None:
         with open(os.path.join(project_dir, "common", "tools", "HOSTILE_INPUT_POLICY.md"), "w") as fh:
             fh.write(policy)
@@ -126,7 +137,50 @@ class VerifyContract(unittest.TestCase):
         }}) + "\n"
         r = _verify(CLEAN_CLAUDE_JSON, {"mcp_json": unguarded_mcp})
         self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
-        self.assertIn("rea-guard", r.stdout)
+        self.assertIn("rea-mcp-guarded", r.stdout)
+
+    def test_mcp_json_on_raw_rea_guard_fails(self):
+        """wq#4911: the pre-allowlist registration (rea-guard direct) is no longer good enough."""
+        raw = json.dumps({"mcpServers": {
+            "rea": {"command": "/x/re/bin/rea-guard", "args": ["mcp"]},
+            "rea-maksoor": {"command": "ssh"},
+        }}) + "\n"
+        r = _verify(CLEAN_CLAUDE_JSON, {"mcp_json": raw})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("rea-mcp-guarded", r.stdout)
+
+    def test_missing_guarded_launcher_fails(self):
+        r = _verify(CLEAN_CLAUDE_JSON, {"launcher": None})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("rea-mcp-guarded", r.stdout)
+
+    def test_missing_allowlist_fails(self):
+        r = _verify(CLEAN_CLAUDE_JSON, {"allow": None})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("rea-allow.txt", r.stdout)
+
+    def test_drifted_allowlist_fails(self):
+        r = _verify(CLEAN_CLAUDE_JSON, {"allow": REA_ALLOW + "frida_attach\n"})
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
+
+class Allowlist(unittest.TestCase):
+    """wq#4911: the reviewed static set — 135 of rea 6.5.0's 207 tools."""
+    DENY = re.compile(
+        r"(capture|frida|adb|gdb|rizin|electron|browser|web_|_web|playwright|instrument|observe_|"
+        r"execute_|spawn|launch|debug|install|uninstall|push_|pull_|cutter|runtime_targets)", re.I)
+
+    def test_size_and_shape(self):
+        names = REA_ALLOW.split()
+        self.assertEqual(len(names), 135)
+        self.assertEqual(len(set(names)), 135)
+        for n in names:
+            self.assertRegex(n, r"^[a-z0-9_]+$")
+
+    def test_no_runtime_tool_allowed(self):
+        """Same pattern as /home/lumen/bin/rea-tool-guard: the two layers must agree."""
+        hits = [n for n in REA_ALLOW.split() if self.DENY.search(n)]
+        self.assertEqual(hits, [])
 
     def test_provenance_missing_integrity_fails(self):
         thin_provenance = json.dumps({"package": "rea-agents", "version": "6.5.0"}) + "\n"

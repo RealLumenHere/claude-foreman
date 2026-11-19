@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# rea-mcp-guarded (wq#4911): the LOCAL rea MCP server behind lumen_mcp_guard.py.
+# Installed by ops/wq4006-rea-security-rescope-a1/install.sh into <project>/bin/, next to
+# rea-guard and rea-allow.txt; --verify compares all three byte for byte.
+#
+# Layer 1 (this): a fail-CLOSED allowlist. The 135 static-analysis tools in rea-allow.txt are
+#   the 207-tool rea 6.5.0 catalog minus the 72 exec/runtime/web/ADB/debugger/cutter tools that
+#   HOSTILE_INPUT_POLICY.md section 2 keeps off Lumen. A tool added by a future rea release is
+#   hidden until someone reviews it and adds it to rea-allow.txt. (The old denylist failed open.)
+# Layer 2 (kept): the /home/lumen/bin/rea-tool-guard PreToolUse hook (matcher mcp__rea__.*).
+# Results are masked and wrapped as untrusted: rea decompiles hostile binaries.
+set -euo pipefail
+export PYTHONWARNINGS=ignore
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+GDIR=/home/lumen/.local/share/mcp/_guard
+ALLOW="$(tr -s '[:space:]' ',' < "$HERE/rea-allow.txt" | sed 's/^,//; s/,$//')"
+[ -n "$ALLOW" ] || { echo "rea-mcp-guarded: empty allowlist at $HERE/rea-allow.txt, refusing" >&2; exit 1; }
+exec "$GDIR/venv/bin/python" -I "$GDIR/lumen_mcp_guard.py" --name rea \
+  --allow "$ALLOW" \
+  --mask-output /home/lumen/bin/mask-secrets \
+  --max-result-bytes 524288 --untrusted-output \
+  -- "$HERE/rea-guard" mcp

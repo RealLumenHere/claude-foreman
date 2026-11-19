@@ -21,6 +21,9 @@ if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
 
   vfile "$SRC/rea-guard" "$PROJECT_DIR/bin/rea-guard"
+  # wq#4911: local rea runs behind lumen_mcp_guard (fail-closed allowlist).
+  vfile "$SRC/rea-mcp-guarded" "$PROJECT_DIR/bin/rea-mcp-guarded"
+  vfile "$SRC/rea-allow.txt" "$PROJECT_DIR/bin/rea-allow.txt"
   vfile "$SRC/HOSTILE_INPUT_POLICY.md" "$PROJECT_DIR/common/tools/HOSTILE_INPUT_POLICY.md"
 
   if [ ! -r "$PROJECT_DIR/.mcp.json" ]; then
@@ -28,7 +31,7 @@ if [ "${1:-}" = --verify ]; then
   else
     vcontains "$PROJECT_DIR/.mcp.json" '"rea"[[:space:]]*:'
     vcontains "$PROJECT_DIR/.mcp.json" '"rea-maksoor"[[:space:]]*:'
-    vcontains "$PROJECT_DIR/.mcp.json" 'bin/rea-guard'
+    vcontains "$PROJECT_DIR/.mcp.json" 'bin/rea-mcp-guarded'
   fi
 
   if [ ! -r "$PROJECT_DIR/PROVENANCE.json" ]; then
@@ -86,8 +89,14 @@ fi
 mkdir -p "$PROJECT_DIR/bin" "$PROJECT_DIR/common/tools"
 cp "$SRC/rea-guard" "$PROJECT_DIR/bin/rea-guard"
 chmod +x "$PROJECT_DIR/bin/rea-guard"
+cp "$SRC/rea-mcp-guarded" "$PROJECT_DIR/bin/rea-mcp-guarded"
+chmod +x "$PROJECT_DIR/bin/rea-mcp-guarded"
+cp "$SRC/rea-allow.txt" "$PROJECT_DIR/bin/rea-allow.txt"
 cp "$SRC/HOSTILE_INPUT_POLICY.md" "$PROJECT_DIR/common/tools/HOSTILE_INPUT_POLICY.md"
 
+if [ -e "$PROJECT_DIR/.mcp.json" ]; then
+  cp -p "$PROJECT_DIR/.mcp.json" "$PROJECT_DIR/.mcp.json.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+fi
 sed "s#{{PROJECT_DIR}}#$PROJECT_DIR#g" "$SRC/rea.mcp.json.project" > "$PROJECT_DIR/.mcp.json"
 echo "wrote $PROJECT_DIR/.mcp.json (scope: project)"
 
