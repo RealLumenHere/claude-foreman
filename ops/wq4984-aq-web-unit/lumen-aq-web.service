@@ -1,0 +1,20 @@
+[Unit]
+Description=Lumen aq web view (read-only alert queue page, 127.0.0.1:8766, tailscale serve /alerts) (wq#4984)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=lumen
+Group=lumen
+WorkingDirectory=/home/lumen/agents/alert-queue
+ExecStart=/usr/bin/python3 /home/lumen/agents/alert-queue/aq_web.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
