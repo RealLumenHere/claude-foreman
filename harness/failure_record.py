@@ -2,8 +2,11 @@
 """failure_record.py — wq#1330, WORKER_EXEC_CAPABILITY_GAP.md §4 slice 1.
 
 The machine-readable terminal-failure record (`_runs/wq<id>/failure.json`, schema v1)
-plus the mechanical triage that decides which of six buckets a dead run belongs to:
+plus the mechanical triage that decides which of seven buckets a dead run belongs to:
 
+    CLASSIFIER_DENIED  Claude Code's own permission decision killed the run (auto-mode
+                       classifier, or a hard "has been denied") — a decision for Frank,
+                       never a retry (wq#5118)
     CAPABILITY_DENIED  the sandbox refused something that maps to a §2.3 capability tag
     HARNESS_DEFECT     our own configuration broke (worktree/repo mismatch, hook crash)
     GENUINE_BUG        the work itself failed (traceback, hang inside a test/build)
@@ -38,7 +41,10 @@ import masking  # noqa: E402  (wq#2275: transcript masking at read time)
 # v2 (wq#1436, BROKER_WIRING.md §2.5): adds `refused` and fills unreachable_paths /
 # inferred_needs on a spawn refusal, which v1 always wrote empty. Additive — every v1
 # key is still present with the same meaning.
-SCHEMA_VERSION = 2
+# v3 (wq#5118): adds `route` (where the ticket goes next; "frank_gated" for a
+# CLASSIFIER_DENIED run, else None) and an `action` key on classifier-denied
+# denied_calls rows. Additive again.
+SCHEMA_VERSION = 3
 FAILURE_FILENAME = "failure.json"
 
 TRIAGE_CAPABILITY_DENIED = "CAPABILITY_DENIED"
@@ -47,8 +53,21 @@ TRIAGE_GENUINE_BUG = "GENUINE_BUG"
 TRIAGE_REAL_BLOCK = "REAL_BLOCK"
 TRIAGE_LIMIT = "LIMIT"
 TRIAGE_UNKNOWN = "UNKNOWN"
-TRIAGE_VALUES = (TRIAGE_CAPABILITY_DENIED, TRIAGE_HARNESS_DEFECT, TRIAGE_GENUINE_BUG,
+TRIAGE_CLASSIFIER_DENIED = "CLASSIFIER_DENIED"
+TRIAGE_VALUES = (TRIAGE_CLASSIFIER_DENIED, TRIAGE_CAPABILITY_DENIED,
+                 TRIAGE_HARNESS_DEFECT, TRIAGE_GENUINE_BUG,
                  TRIAGE_REAL_BLOCK, TRIAGE_LIMIT, TRIAGE_UNKNOWN)
+
+# wq#5118: where a terminal failure goes next. Only CLASSIFIER_DENIED has a route of its
+# own — Frank's decision queue (frank_gated -> pending_review), because the same action
+# gets the same refusal on a retry. Every other class keeps the ordinary block path.
+ROUTE_FRANK_GATED = "frank_gated"
+TRIAGE_ROUTES = {TRIAGE_CLASSIFIER_DENIED: ROUTE_FRANK_GATED}
+
+
+def route_for(verdict):
+    """The decision queue a triage verdict routes to, or None (ordinary block path)."""
+    return TRIAGE_ROUTES.get(verdict)
 
 # wq#4254 (judgment on wq#4245's CONTRADICT of wq#4235): the triage classes that say
 # nothing about whether this (model, prompt_template) is any good at this ticket class.
@@ -60,8 +79,9 @@ TRIAGE_VALUES = (TRIAGE_CAPABILITY_DENIED, TRIAGE_HARNESS_DEFECT, TRIAGE_GENUINE
 # ticket, or failing with no mechanical signature at all, are both real competence
 # signals for the cell. Same reasoning as the local-rung escalation skip in
 # fworker.handle_failure() — "a different model can't help here".
+# wq#5118: CLASSIFIER_DENIED joins them — a permission decision no model gets past.
 TRIAGE_NON_COMPETENCE = frozenset({TRIAGE_REAL_BLOCK, TRIAGE_CAPABILITY_DENIED,
-                                   TRIAGE_HARNESS_DEFECT})
+                                   TRIAGE_HARNESS_DEFECT, TRIAGE_CLASSIFIER_DENIED})
 
 LUMEN_STATE = os.environ.get("FOREMAN_LUMEN_STATE",
                              "/home/lumen/minerva/lumen_state.py")
@@ -95,6 +115,59 @@ _STRUCTURAL_KINDS = (
     ("heredoc_brace_quote", re.compile(
         r"brace with quote character|expansion obfuscation", re.I)),
 )
+
+
+# wq#5118 (wq#5002 killed as UNKNOWN after 5 identical refusals): Claude Code's own
+# permission decisions, as opposed to the allowlist misses PERMISSION_DENIAL_RE matches.
+# Strings read out of the CLI 2.1.296 bundle:
+#   "Permission for this action was denied by the Claude Code auto mode classifier.
+#    Reason: <r>. If you have other tasks that don't depend on this action, ..."
+#   "Permission for this action has been denied. Reason: <r>"
+#   "Permission to use <Tool> has been denied. IMPORTANT: ..."
+# All three end on the same "do not bypass the intent behind this denial ... Let the user
+# decide how to proceed" clause, which is all LoopTracker._error_sig() keeps (last 240
+# chars) — so the tail cannot tell them apart and the HEAD is matched here. None contains
+# "requires approval", so is_permission_denial() never sees them. Retrying gets the same
+# refusal: the cure is a decision, so the run goes to Frank's queue, not back to a worker.
+CLASSIFIER_REFUSAL = "auto_mode_classifier"
+PERMISSION_REFUSAL = "permission_denied"
+_DECISION_REFUSALS = frozenset({CLASSIFIER_REFUSAL, PERMISSION_REFUSAL})
+_AUTO_MODE_DENIAL_RE = re.compile(
+    r"denied by the Claude Code auto mode classifier", re.I)
+_HARD_DENIAL_RE = re.compile(
+    r"Permission for this action has been denied"
+    r"|Permission to use [\w.-]+ has been denied", re.I)
+_DENIAL_REASON_RE = re.compile(
+    r"Reason:\s*(.+?)(?=\.\s+If you have other tasks|\s+IMPORTANT:|$)", re.S)
+
+
+def decision_denial_kind(text):
+    """CLASSIFIER_REFUSAL / PERMISSION_REFUSAL when `text` is one of Claude Code's own
+    permission decisions (wq#5118), else None."""
+    if not text:
+        return None
+    if _AUTO_MODE_DENIAL_RE.search(text):
+        return CLASSIFIER_REFUSAL
+    if _HARD_DENIAL_RE.search(text):
+        return PERMISSION_REFUSAL
+    return None
+
+
+def _denial_reason(text):
+    """The CLI's own "Reason: ..." for a decision denial, one line, or None."""
+    m = _DENIAL_REASON_RE.search(text or "")
+    if not m:
+        return None
+    return " ".join(m.group(1).split())[:200] or None
+
+
+def _action_label(tool, tool_input):
+    """The denied action as a human reads it: the Bash command, else tool + target."""
+    ti = tool_input or {}
+    if tool == "Bash":
+        return " ".join((ti.get("command") or "").split())[:160] or "Bash"
+    target = ti.get("file_path") or ti.get("url") or ti.get("path") or ""
+    return f"{tool or '?'} {target}".strip()[:160]
 
 
 def _structural_kind(text):
@@ -285,6 +358,24 @@ def extract_denied_calls(events, node_map=None, reachable_roots=None):
                 if sig:
                     last_error_sig = sig
                 structural_kind = _structural_kind(text)
+                # wq#5118: a decision denial is its own row, tagged with the denied
+                # action and the CLI's reason; it never doubles as a structural/path one.
+                decision_kind = decision_denial_kind(text)
+                if decision_kind:
+                    argv = _argv(ti.get("command") or "")[:6]
+                    argv0 = os.path.basename(argv[0]) if argv else (tool or "?")
+                    node = _target_node(argv, node_map) if tool == "Bash" and argv else None
+                    target = node or (_raw_target(argv) if tool == "Bash" and argv
+                                      else None)
+                    key = (tool, argv0, decision_kind, target)
+                    if key in denied:
+                        denied[key]["count"] += 1
+                    else:
+                        denied[key] = {"tool": tool, "argv0": argv0, "target": target,
+                                       "node": node, "refusal": decision_kind, "count": 1,
+                                       "argv": argv, "reason_text": _denial_reason(text),
+                                       "action": _action_label(tool, ti)}
+                    continue
                 # wq#2579: a structural refusal (heredoc brace-quote especially) is not
                 # guaranteed to contain "requires approval" — is_permission_denial() alone
                 # would drop it, same as action_gate.LoopTracker's own
@@ -348,6 +439,9 @@ def infer_needs(denied_calls, unreachable_paths):
             needs.append(tag)
 
     for d in denied_calls:
+        if d.get("refusal") in _DECISION_REFUSALS:
+            # wq#5118: not an allowlist gap — a capability tag would not have changed it.
+            continue
         a, argv, node = d.get("argv0"), d.get("argv") or [], d.get("node")
         if a in _SSH_ARGV0:
             if node:
@@ -425,13 +519,61 @@ def _last_tool_frames(events):
     return last_use, last_err
 
 
+def classifier_denied_signal(events):
+    """wq#5118: {"kind", "tool", "action", "reason"} when the run DIED ON one of Claude
+    Code's own permission decisions — its last errored tool result is one — else None.
+    A denial the worker got past (later errors are something else) is not the cause of
+    death and stays out. A hard denial of WebSearch/WebFetch is left to needs_web_signal
+    (wq#4716 already names its cure); the auto-mode classifier counts for any tool."""
+    pending, last = {}, None
+    for frame in events or []:
+        msg = frame.get("message")
+        content = (msg.get("content") if isinstance(msg, dict) else None) or []
+        if frame.get("type") == "assistant":
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    pending[b.get("id")] = (b.get("name") or "", b.get("input") or {})
+        elif frame.get("type") == "user":
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_result" \
+                        and b.get("is_error"):
+                    tool, ti = pending.get(b.get("tool_use_id"), ("", {}))
+                    last = (tool, ti, _result_text(b))
+    if not last:
+        return None
+    tool, ti, text = last
+    kind = decision_denial_kind(text)
+    if not kind or (kind == PERMISSION_REFUSAL and tool in _WEB_TOOLS):
+        return None
+    return {"kind": kind, "tool": tool, "action": _action_label(tool, ti),
+            "reason": _denial_reason(text)}
+
+
+def _classifier_denied_head(signal, denied_calls):
+    hits = [d for d in denied_calls if d.get("refusal") == signal["kind"]]
+    n = sum(d["count"] for d in hits) or 1
+    who = ("auto-mode classifier" if signal["kind"] == CLASSIFIER_REFUSAL
+           else "Claude Code permission layer")
+    head = f"{who} denied {n}x: {signal['action']}"
+    if signal.get("reason"):
+        head += f" (reason: {signal['reason']})"
+    return head + " — needs Frank's permission decision; a retry gets the same refusal"
+
+
 def triage(classification, trip_kind, denied_calls, unreachable_paths,
            worktree_check, events, worker_block_reason=None):
     """(triage, one_line) — mechanical, doc §4.1 order. one_line is the human head
     of the wq block reason; the caller appends '; see <failure.json path>'."""
+    # wq#5118: a run that died on a Claude Code permission decision is named first, ahead
+    # of every other signature — unless the worker already blocked the ticket itself,
+    # which is the documented good path ("STOP and explain") and stays REAL_BLOCK below.
+    decision = classifier_denied_signal(events)
+    if decision and not worker_block_reason:
+        return TRIAGE_CLASSIFIER_DENIED, _classifier_denied_head(decision, denied_calls)
     capability_hits = [d for d in denied_calls
-                       if d.get("argv0") in _CAPABILITY_ARGV0
-                       or d.get("refusal") == "blocked_path"]
+                       if d.get("refusal") not in _DECISION_REFUSALS
+                       and (d.get("argv0") in _CAPABILITY_ARGV0
+                            or d.get("refusal") == "blocked_path")]
     # wq#2579: a structural refusal (for/while loop, cd+relative-path, heredoc
     # brace-quote) is a Claude CLI shell-safety rule, not a missing allowlist entry —
     # name it explicitly so the head matches a mechanical signature instead of
@@ -521,11 +663,17 @@ def build_failure_record(ticket, attempts, classification, block_class,
                                   "expected_repo": expected_repo, "match": None})
     verdict, one_line = triage(classification, trip_kind, denied, unreachable,
                                wt, events, worker_block_reason=worker_block_reason)
+    if verdict == TRIAGE_CLASSIFIER_DENIED and block_class:
+        # wq#5118: wq#5002's KILLED loop was filed INFRA_CRASH, the class self_heal
+        # auto-releases — i.e. straight back into the same refusal. It is a work block.
+        block_class = "WORK_BLOCKED"
     denied_out = []
     for d in denied:
         row = {k: d[k] for k in ("tool", "argv0", "target", "refusal", "count")}
         if d.get("reason_text"):
             row["reason_text"] = d["reason_text"]
+        if d.get("action"):
+            row["action"] = d["action"]
         denied_out.append(row)
     structured = {"unreachable_paths": unreachable, "refused": [],
                   "inferred_needs": infer_needs(denied, unreachable)}
@@ -540,6 +688,7 @@ def build_failure_record(ticket, attempts, classification, block_class,
         "classification": classification,
         "block_class": block_class,
         "triage": verdict,
+        "route": route_for(verdict),
         "summary": one_line,
         "denied_calls": denied_out,
         "inferred_needs": structured["inferred_needs"],

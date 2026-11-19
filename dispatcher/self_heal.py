@@ -119,13 +119,16 @@ BLOCK_PREFIX_RE = re.compile(
 # daemon acts on moved into the failure.json the reason points at; the prefix map
 # below is the conservative fallback when that file is missing/unreadable.
 TRIAGE_PREFIX_RE = re.compile(
-    r"^(CAPABILITY_DENIED|HARNESS_DEFECT|GENUINE_BUG|REAL_BLOCK|LIMIT|UNKNOWN):"
+    r"^(CLASSIFIER_DENIED|CAPABILITY_DENIED|HARNESS_DEFECT|GENUINE_BUG|REAL_BLOCK|LIMIT"
+    r"|UNKNOWN):"
     r"\s*(.*)$", re.S)
 TRIAGE_FALLBACK_CLASS = {
     "CAPABILITY_DENIED": "HARNESS_DEFECT",  # our pack refused the call — wq#1107 bucket
     "HARNESS_DEFECT": "HARNESS_DEFECT",
     "LIMIT": "LIMIT_HIT",
     # GENUINE_BUG / REAL_BLOCK / UNKNOWN: conservative, never auto-released
+    # CLASSIFIER_DENIED (wq#5118): deliberately absent — a Claude Code permission
+    # decision is Frank's to make; auto-releasing it re-runs the refused action.
 }
 FAILURE_JSON_RE = re.compile(r"see\s+(\S+failure\.json)")
 # wq list line: `[ 12] lane p1 ep0 blocked  title...` (ep tag only when it differs)
@@ -324,6 +327,10 @@ def classify_block(ticket):
     t = TRIAGE_PREFIX_RE.match(reason)
     if not t:
         return None, reason
+    if t.group(1) == "CLASSIFIER_DENIED":
+        # wq#5118: never read through to the failure.json class — a record written
+        # before the fix (or by hand) may still say INFRA_CRASH, which auto-releases.
+        return "WORK_BLOCKED", t.group(2)
     fj = FAILURE_JSON_RE.search(reason)
     if fj:
         try:

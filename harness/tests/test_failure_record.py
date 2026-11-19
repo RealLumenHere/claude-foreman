@@ -382,3 +382,147 @@ def test_classify_block_legacy_prefix_still_wins():
     klass, detail = self_heal.classify_block(
         {"block_reason": "INFRA_CRASH: LAUNCH_FAILURE after 2 attempts; transcript=x"})
     assert klass == "INFRA_CRASH"
+
+
+# ---- wq#5118: Claude Code permission decisions (auto-mode classifier / hard denial) -----
+# Texts as the CLI 2.1.296 bundle builds them; the tail is the clause wq#5002's
+# last_error_sig recorded, shared by all three.
+_DENIAL_TAIL = ("IMPORTANT: You *may* attempt to accomplish this action using other tools "
+                "that might naturally be used to accomplish this goal, e.g. using head "
+                "instead of cat. But you *should not* attempt to work around this denial "
+                "in malicious ways, e.g. do not use your ability to run tests to execute "
+                "non-test actions. You should only try to work around this restriction in "
+                "reasonable ways that do not attempt to bypass the intent behind this "
+                "denial. If you believe this capability is essential to complete the "
+                "user's request, STOP and explain to the user what you were trying to do "
+                "and why you need this permission. Let the user decide how to proceed.")
+AUTO_MODE_DENIAL = ("Permission for this action was denied by the Claude Code auto mode "
+                    "classifier. Reason: Unauthorized Access. If you have other tasks that "
+                    "don't depend on this action, continue working on those. "
+                    + _DENIAL_TAIL)
+HARD_DENIAL = "Permission to use Bash has been denied. " + _DENIAL_TAIL
+REASONED_DENIAL = "Permission for this action has been denied. Reason: blocked by policy"
+GREP_CMD = "grep -n litellm /home/lumen/foreman/harness/hallucination_guard.py"
+
+
+@pytest.mark.parametrize("text,kind", [
+    (AUTO_MODE_DENIAL, fr.CLASSIFIER_REFUSAL),
+    (HARD_DENIAL, fr.PERMISSION_REFUSAL),
+    (REASONED_DENIAL, fr.PERMISSION_REFUSAL),
+    (APPROVAL, None), (COMPOUND, None), (PATH_BLOCK, None), (WEB_REFUSAL, None),
+    ("grep: /nope: No such file or directory", None), ("", None), (None, None),
+])
+def test_decision_denial_kind(text, kind):
+    assert fr.decision_denial_kind(text) == kind
+
+
+def test_auto_mode_denial_is_not_an_allowlist_denial():
+    """The reason it fell to UNKNOWN: neither existing matcher sees it."""
+    assert not fr.is_permission_denial(AUTO_MODE_DENIAL)
+    assert not fr.is_permission_denial(HARD_DENIAL)
+
+
+def test_auto_mode_denial_row_names_action_and_reason():
+    denied, unreachable, sig = fr.extract_denied_calls(
+        denial_events(GREP_CMD, text=AUTO_MODE_DENIAL, times=5), node_map=NODE_MAP)
+    assert unreachable == []
+    assert len(denied) == 1
+    d = denied[0]
+    assert d["refusal"] == fr.CLASSIFIER_REFUSAL and d["count"] == 5
+    assert d["argv0"] == "grep" and d["action"] == GREP_CMD
+    assert d["reason_text"] == "Unauthorized Access"
+    assert sig.endswith("let the user decide how to proceed.")
+    assert fr.infer_needs(denied, unreachable) == []
+
+
+def test_classifier_denied_ssh_infers_no_capability_need():
+    denied, _, _ = fr.extract_denied_calls(
+        denial_events("ssh thor uptime", text=AUTO_MODE_DENIAL), node_map=NODE_MAP)
+    assert denied[0]["node"] == "thor"
+    assert fr.infer_needs(denied, []) == []
+
+
+def test_triage_wq5002_shape_is_classifier_denied():
+    """wq#5002: KILLED by loop_break after the same refusal 5x -> was UNKNOWN."""
+    t, head = _triage(classification="KILLED",
+                      events=denial_events(GREP_CMD, text=AUTO_MODE_DENIAL, times=5))
+    assert t == "CLASSIFIER_DENIED"
+    assert head.startswith("auto-mode classifier denied 5x: " + GREP_CMD)
+    assert "reason: Unauthorized Access" in head and "Frank" in head
+    assert fr.route_for(t) == fr.ROUTE_FRANK_GATED
+
+
+def test_triage_hard_denial_is_classifier_denied_and_says_which_layer():
+    t, head = _triage(events=denial_events(GREP_CMD, text=HARD_DENIAL, times=5))
+    assert t == "CLASSIFIER_DENIED"
+    assert head.startswith("Claude Code permission layer denied 5x: ")
+
+
+def test_triage_classifier_denial_outranks_capability_and_limit():
+    ev = denial_events("ssh thor uptime", text=AUTO_MODE_DENIAL, times=2)
+    assert _triage(classification="TURNS", events=ev)[0] == "CLASSIFIER_DENIED"
+
+
+def test_triage_survived_classifier_denial_is_not_the_cause():
+    """Denied once, worked around it, then died on something else."""
+    ev = denial_events(GREP_CMD, text=AUTO_MODE_DENIAL)
+    ev += [use("Bash", {"command": "pytest -q"}, "z"), err("z", "1 failed")]
+    assert fr.classifier_denied_signal(ev) is None
+    t, _ = _triage(classification="TURNS", events=ev)
+    assert t == "LIMIT"
+
+
+def test_triage_worker_self_block_outranks_classifier_denial():
+    t, head = _triage(events=denial_events(GREP_CMD, text=AUTO_MODE_DENIAL),
+                      worker_reason="needs Frank: classifier refused the audit grep")
+    assert t == "REAL_BLOCK" and head.startswith("needs Frank")
+
+
+def test_hard_denied_web_tool_stays_needs_web():
+    ev = denial_events(None, text="Permission to use WebFetch has been denied. "
+                       + _DENIAL_TAIL, tool="WebFetch", inp={"url": "https://x.test"})
+    assert fr.classifier_denied_signal(ev) is None
+    t, head = _triage(events=ev)
+    assert t == "CAPABILITY_DENIED" and head.startswith("needs-web")
+
+
+def test_auto_mode_denied_web_tool_is_classifier_denied():
+    ev = denial_events(None, text=AUTO_MODE_DENIAL, tool="WebFetch",
+                       inp={"url": "https://x.test"})
+    sig = fr.classifier_denied_signal(ev)
+    assert sig["kind"] == fr.CLASSIFIER_REFUSAL and sig["action"] == "WebFetch https://x.test"
+
+
+def test_classifier_denied_record_routes_to_frank_and_is_a_work_block(tmp_path):
+    rec = fr.build_failure_record(
+        ticket=5002, attempts=2, classification="KILLED", block_class="INFRA_CRASH",
+        events=denial_events(GREP_CMD, text=AUTO_MODE_DENIAL, times=5),
+        node_map=NODE_MAP, check_worktree=False)
+    assert rec["triage"] == "CLASSIFIER_DENIED"
+    assert rec["route"] == "frank_gated"
+    assert rec["block_class"] == "WORK_BLOCKED"
+    assert rec["inferred_needs"] == []
+    assert rec["denied_calls"][0]["action"] == GREP_CMD
+    path = fr.write_failure_record(str(tmp_path), rec)
+    assert fr.block_reason_line(rec, path).startswith("CLASSIFIER_DENIED: auto-mode")
+
+
+def test_other_triage_has_no_route():
+    rec = fr.build_failure_record(
+        ticket=1, attempts=2, classification="CRASH", block_class="INFRA_CRASH",
+        events=[], node_map=NODE_MAP, check_worktree=False)
+    assert rec["triage"] == "UNKNOWN" and rec["route"] is None
+    assert rec["block_class"] == "INFRA_CRASH"
+
+
+def test_classifier_denied_is_a_non_competence_triage_value():
+    assert "CLASSIFIER_DENIED" in fr.TRIAGE_VALUES
+    assert "CLASSIFIER_DENIED" in fr.TRIAGE_NON_COMPETENCE
+
+
+def test_classify_block_never_auto_releases_classifier_denied(tmp_path):
+    fpath = tmp_path / "failure.json"
+    fpath.write_text(json.dumps({"schema": 2, "block_class": "INFRA_CRASH"}))
+    klass, detail = self_heal.classify_block(
+        {"block_reason": f"CLASSIFIER_DENIED: auto-mode classifier denied 5x; see {fpath}"})
+    assert klass == "WORK_BLOCKED" and detail.startswith("auto-mode classifier")

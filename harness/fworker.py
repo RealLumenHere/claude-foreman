@@ -5742,6 +5742,71 @@ def handle_rung_fault(args, ticket_id, attempt, classification, cause, state, ev
     return EXIT_RUNG_FAULT
 
 
+def frank_gate_classifier_denial(ticket_id, rec, fpath):
+    """wq#5118: move a claimed ticket into Frank's decision queue with the denied action
+    named. Same order as park.park_round (wq#5009): release clears the claim, then
+    frank_gated (unclaimable), then `wq decide` files the question (-> pending_review).
+    True once the row is frank_gated and unclaimed; a failed `decide` after that is only
+    logged — the row is already out of the dispatcher's reach. False = nothing gated,
+    the caller blocks instead."""
+    wq_release(ticket_id)
+    p = wq("edit", str(ticket_id), "--status", "frank_gated",
+           "--gate-type", "frank_decision")
+    after = wq_show(ticket_id)
+    if p.returncode != 0 or after.get("status") != "frank_gated" or after.get("claimed_by"):
+        log(f"WARN wq#{ticket_id}: frank-gate did not take (status="
+            f"{after.get('status')!r}, claimed_by={after.get('claimed_by')!r}): "
+            f"{((p.stdout or '') + (p.stderr or '')).strip()[-200:]}")
+        return False
+    prompt = (f"wq#{ticket_id} stopped on a Claude Code permission denial: "
+              f"{rec['summary']}. Options: (1) allow the action (settings allow rule or a "
+              f"needs: tag) and reopen; (2) rewrite the ticket so it does not need the "
+              f"action; (3) run it attended; (4) retire the ticket. Record: {fpath}")
+    p = wq("decide", str(ticket_id), "--prompt", prompt,
+           "--rec", "Do not redispatch unchanged: the same action is refused the same "
+                    "way. Decide whether the denied action is wanted at all, then pick "
+                    "(1) or (2).",
+           "--no-probe", "permission decision for Frank (wq#5118)")
+    if p.returncode != 0:
+        log(f"WARN wq#{ticket_id}: wq decide failed, row stays frank_gated: "
+            f"{((p.stdout or '') + (p.stderr or '')).strip()[-200:]}")
+    wq("note", str(ticket_id),
+       f"[classifier-denied wq#5118] {failure_record.block_reason_line(rec, fpath)}")
+    return True
+
+
+def handle_classifier_denied(args, ticket_id, attempt, classification, state, events,
+                              worktree):
+    """wq#5118: the attempt died on a Claude Code permission decision (auto-mode
+    classifier / hard denial). A fresh attempt runs the same action into the same
+    refusal (wq#5002: two attempts, 5 identical refusals each), so this skips the
+    MAX_ATTEMPTS retry and routes the ticket to Frank's decision queue. Returns None
+    when it does not apply (the worker already blocked or released the ticket itself,
+    or triage disagrees) — the caller carries on down the ordinary path."""
+    ticket = wq_show(ticket_id)
+    if ticket.get("status") != "claimed":
+        return None
+    rec, fpath = record_terminal_failure(
+        ticket_id, attempt, classification, state, events, worktree,
+        expected_repo=args.repo, archetype=(args.archetype or "standard-engineering"),
+        lane=ticket.get("lane"),
+        needs_dirs=needs_mod.parse(ticket.get("needs"), ticket.get("detail", "")).dirs)
+    if rec["triage"] != failure_record.TRIAGE_CLASSIFIER_DENIED:
+        return None
+    reason = failure_record.block_reason_line(rec, fpath)
+    record_recipe_outcome(ticket, args, success=False, triage=rec["triage"])
+    if frank_gate_classifier_denial(ticket_id, rec, fpath):
+        log(f"FRANK-GATED [{rec['triage']}]: {reason}")
+        ntfy("foreman FRANK-GATED", f"wq#{ticket_id}: {reason}", priority="high")
+    else:
+        # never back to a worker: a block is the fallback when the gate did not take
+        log(f"BLOCKED [{rec['block_class']}/{rec['triage']}]: {reason}")
+        wq_block(ticket_id, reason)
+        ntfy("foreman BLOCKED", f"wq#{ticket_id} [{rec['block_class']}]: {reason}",
+             priority="high")
+    return EXIT_BLOCKED
+
+
 def handle_failure(args, ticket_id, attempt, classification, state, events, worktree,
                     charged_to=None, failure_cause=None):
     prior_notes_path = write_prior_attempt_notes(ticket_id, attempt, worktree, events,
@@ -5749,6 +5814,12 @@ def handle_failure(args, ticket_id, attempt, classification, state, events, work
     if charged_to == charging.CHARGE_RUNG:
         return handle_rung_fault(args, ticket_id, attempt, classification, failure_cause,
                                   state, events, worktree)
+    # wq#5118: checked BEFORE the retry branch — retrying is the one wrong answer here.
+    if failure_record.classifier_denied_signal(events):
+        outcome = handle_classifier_denied(args, ticket_id, attempt, classification,
+                                           state, events, worktree)
+        if outcome is not None:
+            return outcome
     if charged_attempt_count(ticket_id, attempt) < MAX_ATTEMPTS:
         log(f"{classification}: attempt {attempt} < {MAX_ATTEMPTS}, restarting fresh worktree")
         return do_attempt(args, attempt + 1)
