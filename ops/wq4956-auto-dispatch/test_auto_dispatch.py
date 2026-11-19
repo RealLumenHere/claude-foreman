@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 import yaml
@@ -71,6 +72,22 @@ if rc:
 print(os.environ.get("AD_PARK", json.dumps({"actions": {}, "ready": []})))
 '''
 
+# wq#5117: the admission pre-check is ALWAYS stubbed here. Without it the pass would run the
+# real dispatcher/admission_gate.py and a test's outcome would depend on live fleet load.
+ADMISSION_STUB = r'''import json, os, sys
+with open(os.environ["AD_ADM_CALLS"], "a") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+tid = sys.argv[sys.argv.index("--ticket") + 1]
+if os.environ.get("AD_ADM_CRASH"):
+    sys.stderr.write("Traceback (most recent call last): boom\n")
+    sys.exit(1)
+deny = os.environ.get("AD_ADM_DENY", "").split(",")
+if tid in deny or "all" in deny:
+    print(json.dumps({"verdict": "deny", "reason": "concurrency_ceiling: 4/4 cloud slots in use"}))
+    sys.exit(1)
+print(json.dumps({"verdict": "ok", "reason": "cloud:claude-sonnet-5-5 slots=1/4"}))
+'''
+
 NOON_PT = "2026-11-12T12:00:00-08:00"    # inside default waking window
 NIGHT_PT = "2026-11-12T03:00:00-08:00"   # outside it
 
@@ -94,13 +111,17 @@ class Base(unittest.TestCase):
             f.write(ROUTER_STUB)
         with open(p("park.py"), "w") as f:
             f.write(PARK_STUB)
+        with open(p("admission_gate.py"), "w") as f:
+            f.write(ADMISSION_STUB)
+        os.mkdir(p("runs"))
         self.paths = dict(tickets=p("tickets.json"), calls=p("calls"), ntfy=p("ntfy"), log=p("ad.log"),
                           state=p("state.json"), budget=p("budget.json"), pause=p("PAUSE"), disarm=p("DISARM"),
-                          stop=p("STOP"), lock=p("lock"), cfg=p("cfg.yaml"), park_calls=p("park_calls"))
+                          stop=p("STOP"), lock=p("lock"), cfg=p("cfg.yaml"), park_calls=p("park_calls"),
+                          adm_calls=p("adm_calls"), runs=p("runs"))
         self.tickets = {}
         self.env = dict(os.environ, AD_TICKETS=self.paths["tickets"], AD_CALLS=self.paths["calls"],
                         AD_NTFY=self.paths["ntfy"], AD_RUNNING="0", AD_BROKER="inactive",
-                        AD_PARK_CALLS=self.paths["park_calls"])
+                        AD_PARK_CALLS=self.paths["park_calls"], AD_ADM_CALLS=self.paths["adm_calls"])
         self.limits = {"session": {"percent": 20}, "weekly_all": {"percent": 30},
                        "fable_weekly_scoped": {"percent": 10}}
         self.overrides = {}
@@ -116,10 +137,12 @@ class Base(unittest.TestCase):
             "foreman_broker": {"timer": "x.timer", "disarm_file": pt["disarm"], "stop_file": pt["stop"]},
             "budget": {"state_file": pt["budget"]},
             "log_file": pt["log"], "state_file": pt["state"], "lock_file": pt["lock"],
+            "dispatch_run_dir": pt["runs"],
             "bins": {"wq": os.path.join(self.d, "wq"), "dispatch_batch": os.path.join(self.d, "dispatch-batch"),
                      "ntfy_send": os.path.join(self.d, "ntfy-send"), "router": os.path.join(self.d, "router.py"),
                      "systemctl": os.path.join(self.d, "systemctl"),
-                     "park": os.path.join(self.d, "park.py")},
+                     "park": os.path.join(self.d, "park.py"),
+                     "admission_gate": os.path.join(self.d, "admission_gate.py")},
         }
         for k, v in self.overrides.items():
             cfg[k] = {**cfg.get(k, {}), **v} if isinstance(v, dict) and isinstance(cfg.get(k), dict) else v
@@ -603,6 +626,120 @@ class TestFailuresLoggingDryRun(Base):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(self.calls(), [])
         self.assertEqual(self.halts()[0]["kind"], "lock")
+
+
+class TestAdmissionDefer(Base):
+    """wq#5117: an admission defer (dispatch-batch QUEUED) is not a dispatch."""
+
+    def ledger(self):
+        return json.load(open(self.paths["state"])).get("dispatched", {})
+
+    def seed(self, **led):
+        json.dump({"dispatched": {k: list(v) for k, v in led.items()}}, open(self.paths["state"], "w"))
+
+    def batch_log(self, tid, line, age_s=0):
+        path = os.path.join(self.paths["runs"], "%s.log" % tid)
+        with open(path, "w") as f:
+            f.write(line + "\n")
+        t = time.time() - age_s
+        os.utime(path, (t, t))
+
+    def test_denied_ticket_is_skipped_without_a_ledger_entry(self):
+        self.tickets = {"1": tk(), "2": tk()}
+        self.run_ad(AD_ADM_DENY="1")
+        self.assertEqual(self.calls(), ["2"])
+        self.assertIn("admission denied: concurrency_ceiling", self.skips()[1])
+        self.assertEqual(sorted(self.ledger()), ["2"])
+
+    def test_two_defers_do_not_burn_the_daily_cap_or_the_cooldown(self):
+        self.tickets = {"1": tk()}
+        self.run_ad(AD_ADM_DENY="1")
+        self.run_ad(AD_ADM_DENY="1")
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.ledger(), {})
+        self.run_ad()
+        self.assertEqual(self.calls(), ["1"])
+        self.assertEqual(len(self.ledger()["1"]), 1)
+
+    def test_started_dispatches_still_hit_the_daily_cap(self):
+        now = time.time()
+        self.tickets = {"1": tk()}
+        self.seed(**{"1": [now - 7200, now - 3600]})
+        self.run_ad()
+        self.assertEqual(self.calls(), [])
+        self.assertIn("attempt cap", self.skips()[1])
+
+    def test_gate_is_asked_only_for_otherwise_dispatchable_tickets(self):
+        self.tickets = {"1": tk(title="[no-auto] x"), "2": tk()}
+        self.run_ad()
+        self.assertEqual(open(self.paths["adm_calls"]).read().split(), ["check", "--ticket", "2"])
+
+    def test_gate_crash_fails_open(self):
+        self.tickets = {"1": tk()}
+        r = self.run_ad(AD_ADM_CRASH="1")
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(self.calls(), ["1"])
+        self.assertTrue([e for e in self.events() if e["event"] == "admission_gate_error"])
+
+    def test_gate_missing_fails_open(self):
+        self.tickets = {"1": tk()}
+        self.overrides = {"bins": {"admission_gate": os.path.join(self.d, "absent.py")}}
+        self.run_ad()
+        self.assertEqual(self.calls(), ["1"])
+
+    def test_dry_run_reports_the_defer(self):
+        self.tickets = {"1": tk()}
+        r = self.run_ad("--dry-run", AD_ADM_DENY="1")
+        self.assertIn("admission denied", r.stdout)
+        self.assertNotIn('"event": "dispatch"', r.stdout)
+
+    def test_queued_batch_is_refunded_and_redispatched(self):
+        now = time.time()
+        self.tickets = {"1": tk()}
+        self.seed(**{"1": [now - 120]})
+        self.batch_log(1, "wq#1 QUEUED admission denied: concurrency_ceiling: 4/4 (left open)", age_s=118)
+        self.run_ad()
+        self.assertEqual(self.calls(), ["1"])              # not held by the 30-min cooldown
+        self.assertEqual(len(self.ledger()["1"]), 1)       # the defer is gone, the real one stays
+        self.assertTrue([e for e in self.events() if e["event"] == "ledger_refund" and e["ticket"] == 1])
+
+    def test_queued_batches_do_not_reach_the_cap(self):
+        now = time.time()
+        self.tickets = {"1": tk()}
+        self.seed(**{"1": [now - 7200, now - 120]})        # one real start, one defer
+        self.batch_log(1, "wq#1 QUEUED admission denied: x", age_s=118)
+        self.run_ad()
+        self.assertEqual(self.calls(), ["1"])
+        self.assertEqual(len(self.ledger()["1"]), 2)
+
+    def test_started_batch_is_not_refunded(self):
+        now = time.time()
+        self.tickets = {"1": tk()}
+        self.seed(**{"1": [now - 120]})
+        self.batch_log(1, "wq#1 UNIT=lumen-job-fworker-wq1-1\nwq#1 OK unit=x claimed_by=fworker-wq1", age_s=110)
+        self.run_ad()
+        self.assertEqual(self.calls(), [])
+        self.assertIn("cooldown", self.skips()[1])
+
+    def test_later_by_hand_queued_batch_does_not_refund_a_real_start(self):
+        now = time.time()
+        self.tickets = {"1": tk()}
+        self.seed(**{"1": [now - 7200, now - 3600]})
+        self.batch_log(1, "wq#1 QUEUED admission denied: x", age_s=0)   # written an hour after the entry
+        self.run_ad()
+        self.assertEqual(self.calls(), [])
+        self.assertIn("attempt cap", self.skips()[1])
+        self.assertEqual(len(self.ledger()["1"]), 2)
+
+    def test_refund_is_not_applied_twice(self):
+        now = time.time()
+        self.tickets = {"1": tk()}
+        self.seed(**{"1": [now - 300, now - 120]})
+        self.batch_log(1, "wq#1 QUEUED admission denied: x", age_s=118)
+        self.run_ad(AD_ADM_DENY="1")                       # refund once, then deferred again
+        self.run_ad(AD_ADM_DENY="1")
+        self.assertEqual(len(self.ledger()["1"]), 1)       # the now-300 entry survives
+        self.assertEqual(len([e for e in self.events() if e["event"] == "ledger_refund"]), 1)
 
 
 class TestParkResume(Base):
