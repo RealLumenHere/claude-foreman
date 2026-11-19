@@ -1,0 +1,30 @@
+{
+ "generated": "2026-11-19T13:09:30+00:00",
+ "note": "wq#5139 serial-maksoor guarded surface; regenerate with install.sh --gen-pins after review",
+ "servers": {
+  "serial-maksoor@guarded": {
+   "tools": {
+    "capture_boot": "ce227a9072adba7d92d21cbe0c674bcaf7693707949dc77ff01df83c72318743",
+    "clear_log": "058c747626eaeecebc5ca3f540912b7b72da25e23ad586cb88f8dbb3a1c663b5",
+    "close": "9b2d9bb840ebef0391d2c792e5333e6a2839e85cabe42a3e58c97f56fac85dfd",
+    "compute_checksum": "f73606c5498ac6df06e8e82f0dec38d3be76653f9b232d3a39b9775d48eaa12d",
+    "flush": "fb1dcf3b950fe49a2244bbabb8d2401115ee36c7c87df18efca5290aa3de3133",
+    "get_log": "3a93656cd0d8497077262446a01dcc501fbe7c777a996f368a6c388c6b12401c",
+    "get_status": "ea461729592a3591143bf87aad66c750d36aa8539c01b2ce4993104de8805d83",
+    "list_connections": "2b488ccc3d5fca6ed87c7f506571e6bef4d95768d27f3bdc77dcc68360a7d957",
+    "list_ports": "62242a5b010305f9f2effada82d3e47421471f8e219e99be31877aeba9333db1",
+    "list_profiles": "09a932c5d391fe3c1dd4f678c08841cebf0ee9ab693e1191fec7eb0bf09f8a4c",
+    "open": "b65e17c2a5d4fa07ef1721a395acc666631f0b5f73315128de559a5e04fa689f",
+    "open_profile": "c3c1424895749a65b1e25d9735cb7e333cd3e222781c9932eb05d0e9f70648a6",
+    "read": "3556ee9f0b27dabacccc0dcba9c0551c6157cf22942ec68a25eadb892b6fe51b",
+    "reconfigure": "f14744500b5f2aa2d984d35bb61861a455f3d6e1e06fb0fab538f9f6b03baf27",
+    "reconnect": "712dab53fe35f44c6a9f4a3a9774dd5fd4195f88c647f5c657ad94417b8aa14b",
+    "send_break": "4d24bad85c8d51217486b1dae5f911da004bd57ceee0410df50d09c12c4f92f3",
+    "set_dtr_rts": "c3d007ac44bc384b37bf1da3006d60a84168f217b05615dc63283ea1fa825bda",
+    "set_flow_control": "a4f96153e4396dd46b4f786f319201f8641ade10077ee13beef766d013d2eb10",
+    "transact": "4f9b08ed9cb65c7b791442bf987c4f916dc87243c114e32e8156a273260caa22",
+    "write": "213e4d6bd67ee695aa38e1c4d065ef3a2b7d2b359126d5a556078ee98d4581b1"
+   }
+  }
+ }
+}

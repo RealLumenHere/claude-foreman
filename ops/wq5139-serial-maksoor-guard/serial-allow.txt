@@ -1,0 +1,28 @@
+# wq#5139 serial-maksoor (qarnet serial-mcp 0.9.3) guard allowlist: 20 of 25 tools.
+# Fail closed: a tool a later serial-mcp release adds stays hidden until reviewed and added here.
+# Hidden (5): configure, save_profile, delete_profile, rollback_profile (mutate the profiles TOML on
+# Maksoor), export_log (writes a host file). See RUNBOOK.md.
+#
+# read-only (no token)
+list_ports
+list_profiles
+list_connections
+get_status
+get_log
+read
+compute_checksum
+# session lifecycle (no token; open may pulse DTR on some adapters, see RUNBOOK.md)
+open
+open_profile
+close
+reconnect
+# energizing: the bridge refuses these without an operator-issued confirm_token (serial.<tool>)
+write
+transact
+capture_boot
+send_break
+set_dtr_rts
+set_flow_control
+reconfigure
+flush
+clear_log
