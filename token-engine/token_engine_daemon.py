@@ -614,7 +614,11 @@ HTTP_TIMEOUT_S = 30
 # body path into the secret store would post the credential as a PR body.
 BODY_ROOT = os.environ.get("TOKEN_ENGINE_BODY_ROOT", "/home/lumen")
 FOOTER_ASSIST = "Assisted-by: Claude (Anthropic) via Lumen Industries automation"
-FOOTER_RE = re.compile(r"^(Refs|Assisted-by|Generated-by|BREAKING CHANGE):")
+FOOTER_RE = re.compile(r"^(Refs|Assisted-by|Generated-by|BREAKING CHANGE|Signed-off-by):")
+# wq#5138 phase 1: every squash/merge body lumen-pr lands carries a DCO sign-off, so the
+# Anubis commit-check (wq#5014, require_signed_off_by) can be switched on. Branch sign-offs
+# are forwarded by FOOTER_RE; a PR whose commits carry none gets this house sign-off.
+FOOTER_SIGNOFF = "Signed-off-by: Lumen Industries <lumen@lumennode.uk>"
 # wq#4796: the house rule is Assisted-by, NEVER Co-authored-by (claude_memory.md).
 # Case-insensitive so "Co-Authored-By:" (the exact casing that landed in wq#4788)
 # is caught — the old carve-out in _pr_footers only matched the exact-case
@@ -956,7 +960,11 @@ def _pr_footers(base, scheme, token, slug, number):
                 elif FOOTER_RE.match(line) and line not in seen:
                     seen.add(line)
                     footers.append(line)
-    return ("\n".join(footers) or FOOTER_ASSIST), coauthor_lines
+    if not footers:
+        footers.append(FOOTER_ASSIST)
+    if not any(f.startswith("Signed-off-by:") for f in footers):
+        footers.append(FOOTER_SIGNOFF)
+    return "\n".join(footers), coauthor_lines
 
 
 def verb_pr_merge(req, grant):

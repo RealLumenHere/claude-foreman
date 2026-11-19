@@ -306,8 +306,41 @@ class PrVerbTest(unittest.TestCase):
         self.assertEqual(merged["method"], "POST")
         self.assertEqual(merged["body"]["do"], "squash")
         self.assertTrue(merged["body"]["delete_branch_after_merge"])
-        self.assertEqual(merged["body"]["merge_message_field"], "Refs: wq#1")
+        self.assertEqual(merged["body"]["merge_message_field"],
+                         "Refs: wq#1\n" + D.FOOTER_SIGNOFF)
         self.assertTrue(result["merged"])
+
+    def _merge_body(self, commit_messages):
+        merged = {}
+
+        def fake_http(method, base, path, scheme, token, body=None):
+            if method == "GET" and path.endswith("/commits"):
+                return 200, [{"commit": {"message": m}} for m in commit_messages]
+            if method == "GET":
+                return 200, {"state": "open", "merged": False, "title": "feat: x",
+                             "head": {"sha": "c" * 40, "ref": "feat/x"}}
+            merged.update(body=body)
+            return 200, {}
+
+        D.http_json = fake_http
+        ok, rule, _, _, _ = D.handle(
+            self.preq("pr-merge", ["lumen/lumen-bin", "11", "squash"]), self.peer)
+        self.assertTrue(ok, rule)
+        return merged["body"]["merge_message_field"]
+
+    def test_pr_merge_forwards_branch_signoff_once(self):
+        # wq#5138: a branch sign-off is carried to main, deduped, and no house
+        # sign-off is added on top of it.
+        so = "Signed-off-by: Frank <frank@example.invalid>"
+        body = self._merge_body([f"feat: a\n\nRefs: wq#2\n{so}\n",
+                                 f"fix: b\n\nRefs: wq#2\n{so}\n"])
+        self.assertEqual(body, f"Refs: wq#2\n{so}")
+        self.assertNotIn(D.FOOTER_SIGNOFF, body)
+
+    def test_pr_merge_adds_house_signoff_when_none(self):
+        # wq#5138: commits with no footers at all still land signed off.
+        body = self._merge_body(["feat: a\n\nno footers here\n"])
+        self.assertEqual(body, D.FOOTER_ASSIST + "\n" + D.FOOTER_SIGNOFF)
 
     def test_pr_merge_refuses_coauthor_trailer(self):
         # wq#4796: a --merge land carries each branch commit onto main
