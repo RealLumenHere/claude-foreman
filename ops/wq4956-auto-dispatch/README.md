@@ -8,7 +8,7 @@ this bundle enables it.
 |---|---|
 | `auto-dispatch` | the script (v3). Deployed copy: `/home/lumen/bin/auto-dispatch` |
 | `lumen-auto-dispatch.service`, `.timer` | units, installed in `/etc/systemd/system`, timer disabled |
-| `test_auto_dispatch.py` | 69 cases; every external binary stubbed, including `park` |
+| `test_auto_dispatch.py` | 81 cases; every external binary stubbed, including `park` and the admission gate |
 | `install.sh` | install / `--verify` / `--dry-run`; never enables the timer |
 
 Config: `/home/lumen/foreman/auto-dispatch.yaml` (read its ENABLEMENT NOTES before enabling).
@@ -41,3 +41,24 @@ requires evidence on origin/main) and wq#5009, which depends on it, could not be
 
 The tests always stub `park`: without the stub a test pass would run the real sweep
 against the live `_runs` tree and could accept a real parked ticket's answer.
+
+## Admission defers are not dispatches (wq#5117)
+
+`dispatch-batch` detaches, exits 0 and only then runs `dispatcher/admission_gate.py`; a
+denied ticket is logged `QUEUED` and no worker starts. The ledger entry was already
+written, so two defers used up `max_dispatch_per_ticket_per_day` and the ticket could not
+be dispatched again that day (wq#4890, wq#5002 on 2026-11-18: 2 dispatches logged, 0 workers).
+
+The ledger now counts started dispatches only:
+
+- the pass asks the same gate (`check --ticket <id>`) before it writes a ledger entry and
+  skips on a deny (`admission denied: ...`). No entry, no `dispatch-batch` call. The
+  pre-check fails open: gate missing, crashed, timed out or unreadable means the pass
+  carries on and `dispatch-batch` decides (`admission_gate_error` in the log);
+- if `dispatch-batch` still queues the ticket (the count moved after the pre-check), the
+  next pass reads `_runs/dispatch/<id>.log` and drops that batch's entry (`ledger_refund`).
+  Only the newest entry, only from a log written within 10 minutes after it, once per log.
+
+The cap itself, the cooldown value, the failure breaker and the lane config are unchanged.
+The breaker reads the same ledger, so a deferred ticket no longer counts toward it as
+"dispatched and still open".

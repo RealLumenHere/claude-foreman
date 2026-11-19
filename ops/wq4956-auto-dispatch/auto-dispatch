@@ -28,6 +28,17 @@ runaway, harness_defect, spawn_loop, fire gates, lane caps. fworker re-checks ca
 spawn, and the per-ticket cooldown/cap plus the failure breaker bound the damage.
 Pass: `dispatch-batch <id>` (it applies its own admission gate on top of these).
 
+ADMISSION DEFERS ARE NOT DISPATCHES (wq#5117). dispatch-batch detaches, exits 0, and only
+then runs dispatcher/admission_gate.py; a denied ticket is logged QUEUED and no worker is
+spawned. The ledger (cooldown, per-day attempt cap) must count STARTED dispatches only:
+  - before spending a ledger entry the pass asks the same gate (`check --ticket <id>`) and
+    skips on a deny: no ledger entry, no dispatch-batch call. The pre-check is advisory and
+    fails open (gate missing, crashed, timed out, unreadable verdict): dispatch-batch stays
+    the authority and never becomes a second place the pass can wedge.
+  - a batch can still be denied after the pre-check admitted (the count moved in between).
+    The next pass reads _runs/dispatch/<id>.log and refunds the ledger entry that batch
+    spent if it says QUEUED.
+
 Scope: Max-subscription capacity only. The per-token Anthropic API key behind
 lumen/claude-* in LiteLLM is NOT a budget this script reads or spends (Frank no-spend rule).
 
@@ -98,11 +109,13 @@ DEFAULTS = {
     "log_max_bytes": 5000000,
     "state_file": "/home/lumen/foreman/auto-dispatch.state.json",
     "lock_file": "/home/lumen/foreman/.auto-dispatch.lock",
+    "dispatch_run_dir": "/home/lumen/foreman/_runs/dispatch",   # dispatch-batch's RUN_DIR (wq#5117)
     "park_resume": {"enabled": True},
     "bins": {
         "park": "/home/lumen/foreman/harness/park.py",
         "wq": "/home/lumen/bin/wq",
         "dispatch_batch": "/home/lumen/bin/dispatch-batch",
+        "admission_gate": "/home/lumen/foreman/dispatcher/admission_gate.py",
         "ntfy_send": "/home/lumen/bin/ntfy-send",
         "router": "/home/lumen/foreman/orchestrator/router.py",
         "systemctl": "/usr/bin/systemctl",
@@ -133,6 +146,7 @@ CF_ROTATION_HOLD_RE = re.compile(r"\[rotation\].*" + CF_NAMED, re.I)
 NODISPATCH_TITLE_RE = re.compile(r"\[epic\]|\[do[ -]?not[ -]?claim\]", re.I)
 ORCH_CREATOR_PREFIX = "orch-"
 WQ_TS = "%Y-%m-%d %H:%M:%S"
+QUEUED_REFUND_WINDOW_S = 600  # wq#5117: dispatch-batch writes <id>.log within seconds of the ledger entry
 
 
 def _unset(v):
@@ -331,6 +345,7 @@ class Ctx:
                 self.state["dispatched"][tid] = ts
             else:
                 del self.state["dispatched"][tid]
+        self.state["refunded"] = {k: v for k, v in self.state.get("refunded", {}).items() if v > cutoff}
         open_ids = {str(i) for i in getattr(self, "open_ids", [])}
         if open_ids:
             self.state["last_skip"] = {k: v for k, v in self.state.get("last_skip", {}).items() if k in open_ids}
@@ -524,11 +539,64 @@ class Ctx:
             return "attempt cap: %d dispatches in 24h" % len(ts)
         return None
 
+    # ---- wq#5117: an admission defer is not a dispatch -----------------------------
+    def admission_reason(self, tid):
+        """Ask the gate dispatch-batch itself applies, BEFORE a ledger entry is spent.
+        Returns a skip reason on a clean deny, else None. Advisory: anything other than a
+        readable deny verdict fails open, because dispatch-batch re-checks anyway."""
+        gate = self.cfg["bins"]["admission_gate"]
+        if not os.path.isfile(gate):
+            return None  # same as dispatch-batch: a missing gate admits
+        rc, out, err = self.run([sys.executable, gate, "check", "--ticket", str(tid)], timeout=60)
+        if rc == 0:
+            return None
+        try:
+            v = json.loads(out.strip().splitlines()[-1])
+            if v.get("verdict") != "deny":
+                raise ValueError("verdict=%r" % v.get("verdict"))
+        except (ValueError, IndexError, AttributeError) as e:
+            self.log("admission_gate_error", ticket=tid, rc=rc,
+                     error=("%s | %s" % (e, (err or out).strip()[-200:]))[:300])
+            return None
+        return "admission denied: %s" % str(v.get("reason") or "no reason given")[:160]
+
+    def refund_queued(self):
+        """Drop the ledger entry of a batch that dispatch-batch QUEUED instead of spawning
+        (the gate denied after this script's own pre-check admitted). <id>.log is truncated
+        by every batch, so it describes the newest one; it is only trusted for the newest
+        ledger entry, and only when written right after it, so a later by-hand batch that
+        got QUEUED cannot refund an auto-dispatch that really started a worker."""
+        run_dir = self.cfg["dispatch_run_dir"]
+        led = self.state.get("dispatched", {})
+        used = self.state.setdefault("refunded", {})  # tid -> mtime of the log already refunded against
+        for tid, ts in list(led.items()):
+            if not ts:
+                continue
+            last = max(ts)
+            path = os.path.join(run_dir, "%s.log" % tid)
+            try:
+                mtime = os.path.getmtime(path)
+                if used.get(tid) == mtime or not 0 <= mtime - last <= QUEUED_REFUND_WINDOW_S:
+                    continue  # one QUEUED log refunds one entry, once
+                with open(path, errors="replace") as f:
+                    body = f.read(8192)
+            except OSError:
+                continue
+            m = re.search(r"^wq#%s QUEUED (.*)$" % re.escape(str(tid)), body, re.M)
+            if not m:
+                continue
+            ts.remove(last)
+            if not ts:
+                del led[tid]
+            used[tid] = mtime
+            self.log("ledger_refund", ticket=int(tid), dispatched_at=int(last), reason=m.group(1)[:200])
+
 
 def run_pass(ctx):
     cfg = ctx.cfg
     ctx.load_state()
     park_ready = ctx.park_sweep()  # wq#5009: before the halts -- reconciles, never dispatches
+    ctx.refund_queued()            # wq#5117: before the breaker and the cap read the ledger
 
     for p in cfg["halt_files"]:
         if os.path.exists(p):
@@ -620,6 +688,10 @@ def run_pass(ctx):
         r = ctx.budget_check(model, stale, detail, limits)
         if r:
             ctx.skip(tid, lane, "%s (model %s)" % (r, model), r.split(":")[0])
+            continue
+        r = ctx.admission_reason(tid)  # wq#5117: last, so only an otherwise-dispatchable ticket pays for it
+        if r:
+            ctx.skip(tid, lane, r, "admission-denied")
             continue
 
         if ctx.dry_run:
