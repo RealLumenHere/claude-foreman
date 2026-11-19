@@ -31,6 +31,10 @@ DEFAULT_FILES = (
 )
 HOOK_DROPPING_ENV = ("CLAUDE_CODE_SAFE_MODE", "CLAUDE_CODE_RESTRICTED")
 BYPASS_MODE = "bypass" + "Permissions"  # split: tests/test_settings_lint.py bans the literal
+# wq#4912: only managed-scope (system-wide) settings reliably enforce
+# disableBypassPermissionsMode. User-scope is silently ignored by Claude Code.
+MANAGED_PATHS = frozenset({"/etc/claude-code/managed-settings.json",
+                           "/Library/Application Support/ClaudeCode/managed-settings.json"})
 
 
 def _hooks(data):
@@ -45,7 +49,7 @@ def _hooks(data):
     return out
 
 
-def audit_settings(data):
+def audit_settings(data, *, is_managed=False):
     perms = data.get("permissions") or {}
     env = data.get("env") or {}
     hooks = _hooks(data)
@@ -64,8 +68,19 @@ def audit_settings(data):
     findings = []
     if perms.get("defaultMode") == BYPASS_MODE:
         findings.append("defaultMode is the bypass mode")
-    if perms.get("disableBypassPermissionsMode") != "disable":
-        findings.append("permissions.disableBypassPermissionsMode is not \"disable\"")
+    bypass_val = perms.get("disableBypassPermissionsMode")
+    if is_managed:
+        # wq#4912: managed scope IS enforced — flag if missing
+        if bypass_val != "disable":
+            findings.append("MANAGED permissions.disableBypassPermissionsMode is not "
+                            "\"disable\" — bypass mode is NOT blocked system-wide")
+    else:
+        # wq#4912: user/project scope is NOT enforced by Claude Code for this key.
+        # The setting here is cosmetic; only managed-settings.json blocks bypass.
+        if bypass_val == "disable":
+            findings.append("permissions.disableBypassPermissionsMode is set in USER "
+                            "scope — this is NOT enforced by Claude Code; only "
+                            "/etc/claude-code/managed-settings.json blocks bypass mode")
     if data.get("skipDangerousModePermissionPrompt"):
         findings.append("skipDangerousModePermissionPrompt is set")
     if data.get("disableAllHooks"):
@@ -81,10 +96,21 @@ def audit_settings(data):
 
 def audit_file(path):
     if not os.path.exists(path):
-        return {"path": path, "exists": False}
+        # wq#4912: a missing managed-settings.json is itself a finding
+        result = {"path": path, "exists": False}
+        if path in MANAGED_PATHS:
+            result["findings"] = [
+                "managed-settings.json does not exist — bypass mode is NOT "
+                "blocked system-wide. Create it with: sudo mkdir -p "
+                "/etc/claude-code && echo '{\"permissions\": "
+                "{\"disableBypassPermissionsMode\": \"disable\"}}' "
+                "| sudo tee /etc/claude-code/managed-settings.json"
+            ]
+        return result
     with open(path) as f:
         data = json.load(f)
-    return {"path": path, "exists": True, **audit_settings(data)}
+    return {"path": path, "exists": True,
+            **audit_settings(data, is_managed=(path in MANAGED_PATHS))}
 
 
 def main(argv):

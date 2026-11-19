@@ -609,6 +609,63 @@ def test_mcp_serial_unclassified_tool_defaults_to_red(tmp_path):
     assert "confirm_token" in err
 
 
+def test_mcp_unlisted_server_defaults_to_red(tmp_path):
+    # wq#4905 / hal-spec.md §9.2a: a server this gate has never classified fails
+    # closed. The message names the remedy so the next agent can add it by PR.
+    rc, err = run_hook(mcp_payload("mcp__never_heard_of_it__do_thing", {"x": 1}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "KNOWN_SOFTWARE_MCP_SERVERS" in err
+
+
+def test_mcp_every_fworker_software_server_is_green(tmp_path):
+    # wq#5029: the default-RED rule must not block the MCP servers fworkers are
+    # actually launched with (fworker.KEENABLE_MCP_CONFIG, permission-profiles/base.json).
+    for tool in ("mcp__keenable__search_web_pages", "mcp__keenable__fetch_page_content",
+                 "mcp__docker__list_containers", "mcp__gitea__list_my_repos"):
+        rc, err = run_hook(mcp_payload(tool, {}), {
+            ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+        assert rc == 0, (tool, err)
+
+
+def test_mcp_classified_hardware_server_read_tool_stays_green(tmp_path):
+    # wq#5029: openocd/flashrom read tools were GREEN before default-RED; an
+    # explicitly classified hardware server must not fall through to the default.
+    for tool in ("mcp__openocd__read_target_memory", "mcp__limpet-flashrom__read_flash"):
+        rc, err = run_hook(mcp_payload(tool, {}), {
+            ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+        assert rc == 0, (tool, err)
+
+
+def test_mcp_labgrid_read_only_tool_is_green(tmp_path):
+    rc, err = run_hook(mcp_payload("mcp__labgrid__list_places", {}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 0, err
+
+
+def test_mcp_labgrid_hard_red_tools_are_blocked(tmp_path):
+    # wq#4905: ssh_run / put_file / flash_* / forward_* are never agent-accessible.
+    for fn in ("ssh_run", "put_file", "flash_image", "forward_add", "place_delete"):
+        rc, err = run_hook(mcp_payload(f"mcp__labgrid__{fn}", {}), {
+            ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+        assert rc == 2, fn
+        assert "unconditionally blocked" in err, (fn, err)
+
+
+def test_mcp_labgrid_release_place_kick_is_hard_red(tmp_path):
+    rc, err = run_hook(mcp_payload("mcp__labgrid__release_place", {"place": "p1", "kick": True}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "kick=true" in err
+
+
+def test_mcp_labgrid_unclassified_tool_needs_confirm_token(tmp_path):
+    rc, err = run_hook(mcp_payload("mcp__labgrid__set_power", {"place": "p1"}), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "confirm_token" in err
+
+
 def test_mcp_energize_red_is_never_judge_overridden(tmp_path):
     # hal-spec.md §9.1: this policy "cannot be overridden ... by prompt
     # engineering" -- the mcp__ RED path returns before enforce_judge_verdict,

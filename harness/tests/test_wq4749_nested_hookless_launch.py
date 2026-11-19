@@ -99,7 +99,9 @@ def run_audit(*paths):
 def test_audit_clean_settings_has_no_findings(tmp_path):
     f = tmp_path / "settings.json"
     f.write_text(json.dumps({
-        "permissions": {"defaultMode": "acceptEdits", "disableBypassPermissionsMode": "disable"},
+        # wq#4912: user scope does not enforce disableBypassPermissionsMode, so a clean
+        # user-scope file does not carry it (setting it there is itself a finding).
+        "permissions": {"defaultMode": "acceptEdits"},
         "hooks": {"PreToolUse": [{"matcher": "*", "hooks": [
             {"type": "command", "command": "/home/lumen/foreman/harness/guard.sh"}]}]},
     }))
@@ -124,7 +126,8 @@ def test_audit_flags_hookless_posture_and_masks_values(tmp_path):
     reps = json.loads(out)
     findings = " | ".join(reps[0]["findings"])
     assert rc == 1, out
-    for needle in ("bypass mode", "disableBypassPermissionsMode", "skipDangerous",
+    # wq#4912: an absent disableBypassPermissionsMode is no longer a user-scope finding.
+    for needle in ("bypass mode", "skipDangerous",
                    "disableAllHooks", "CLAUDE_CODE_SAFE_MODE", "no PreToolUse"):
         assert needle in findings, (needle, findings)
     assert token not in out and env_value not in out
@@ -137,3 +140,39 @@ def test_audit_unparseable_file_exits_2_without_echoing_content(tmp_path):
     f.write_text("{not json " + "y" * 20)
     rc, out = run_audit(str(f))
     assert rc == 2 and "y" * 20 not in out, out
+
+
+# ---------------- wq#4912 / wq#5029: managed-scope audit ----------------
+
+def _csa():
+    import sys
+    if HARNESS not in sys.path:
+        sys.path.insert(0, HARNESS)
+    import claude_settings_audit as csa
+    return csa
+
+
+def test_audit_user_scope_disable_bypass_is_flagged_as_not_enforced():
+    findings = _csa().audit_settings({"permissions": {"disableBypassPermissionsMode": "disable"}})["findings"]
+    assert any("USER scope" in x and "NOT enforced" in x for x in findings), findings
+
+
+def test_audit_managed_scope_requires_disable_bypass():
+    csa = _csa()
+    bad = csa.audit_settings({"permissions": {}}, is_managed=True)["findings"]
+    assert any("MANAGED" in x and "disableBypassPermissionsMode" in x for x in bad), bad
+    good = csa.audit_settings({"permissions": {"disableBypassPermissionsMode": "disable"}},
+                              is_managed=True)["findings"]
+    assert not any("disableBypassPermissionsMode" in x for x in good), good
+
+
+def test_audit_missing_managed_settings_file_is_a_finding(tmp_path, monkeypatch):
+    csa = _csa()
+    p = str(tmp_path / "managed-settings.json")
+    monkeypatch.setattr(csa, "MANAGED_PATHS", frozenset({p}))
+    rep = csa.audit_file(p)
+    assert rep["exists"] is False
+    assert any("managed-settings.json does not exist" in x for x in rep["findings"]), rep
+    # a missing NON-managed file stays a bare {exists: False}
+    other = str(tmp_path / "other.json")
+    assert csa.audit_file(other) == {"path": other, "exists": False}

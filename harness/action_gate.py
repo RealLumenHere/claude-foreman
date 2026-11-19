@@ -913,10 +913,54 @@ HARDWARE_ENERGIZE_MCP_TOOLS = {
 # serial-mcp tool is RED unless it's on this small, read-only allowlist.
 SERIAL_MCP_READ_ONLY_TOOLS = {"list_ports", "list_profiles", "get_profile"}
 
+# wq#4905: labgrid MCP server classification. labgrid exposes 47+ tools including
+# ssh_run, put_file, flash_*, release_place(kick=true), set_power — all energizing.
+# hal-spec.md §9.2a: unclassified capability defaults to energizing.
+# Read-only tools are GREEN; hard-RED tools are NEVER green-lit even with a token;
+# everything else is RED unless a valid energize-confirm token is present.
+LABGRID_READ_ONLY_TOOLS = frozenset({
+    "coordinator_info", "list_places", "show_place", "who",
+    "list_resources", "list_reservations", "wait_for_change", "forward_list",
+    "get_power_state", "get_io", "get_sd_mux", "console_read",
+})
+
+# These labgrid tools are unconditionally RED — they are destructive or
+# grant unsupervised shell/file access to target hardware. No confirm token
+# overrides them; an operator must use the tool directly.
+LABGRID_HARD_RED_TOOLS = frozenset({
+    "ssh_run", "put_file", "get_file", "place_delete",
+    "release_from", "allow_place", "metadata",
+})
+# flash_* and forward_* matched by prefix below.
+LABGRID_HARD_RED_PREFIXES = ("flash_", "forward_")
+# release_place is hard-RED only when kick=true (checked inline).
+
+# wq#4905: known non-hardware / software-only MCP servers whose tools are safe
+# to pass GREEN by default. Every MCP server NOT in this set AND not matching
+# a hardware classifier (serial, openocd, flashrom, labgrid) is default-RED.
+# This is the fail-closed default the ticket requires.
+KNOWN_SOFTWARE_MCP_SERVERS = frozenset({
+    "gitea", "fleet_memory", "fleet-memory", "docker", "grafana",
+    "playwright", "fleet_state", "fleet-state", "stealth_browser",
+    "stealth-browser", "council", "memory", "lumen_mcp_guard",
+    "lumen-mcp-guard", "desktop_commander", "desktop-commander",
+    "languagetool", "searxng", "ntfy",
+    # wq#5029: keenable is the web-search MCP wired into every fworker
+    # (fworker.KEENABLE_MCP_CONFIG, permission-profiles/base.json); without it
+    # default-RED hard-blocks all worker web search.
+    "keenable",
+})
+
 
 def classify_mcp_tool(tool_name, tool_input):
     """RED unless a valid operator-issued confirm token (energize_confirm.py,
-    not a model-supplied bool) is present for an energizing hardware action."""
+    not a model-supplied bool) is present for an energizing hardware action.
+
+    wq#4905: unknown/unlisted MCP servers default to RED (fail-closed).
+    Only servers in KNOWN_SOFTWARE_MCP_SERVERS pass GREEN without explicit
+    classification. Hardware-class servers (serial, openocd, flashrom, labgrid)
+    have per-tool allowlists.
+    """
     parts = tool_name.split("__", 2)
     if len(parts) != 3:
         return "GREEN", "", None
@@ -924,6 +968,7 @@ def classify_mcp_tool(tool_name, tool_input):
     server_l = server.lower()
     token = (tool_input or {}).get("confirm_token") or ""
 
+    # --- serial MCP (wq#4513) ---
     if "serial" in server_l:
         if fn in SERIAL_MCP_READ_ONLY_TOOLS:
             return "GREEN", "", None
@@ -931,23 +976,61 @@ def classify_mcp_tool(tool_name, tool_input):
         if _energize is not None and _energize.verify_token(token, capability):
             return "GREEN", "", None
         return ("RED", f"{tool_name} is on an unauthenticated serial-mcp server "
-                f"with no confirmed read-only classification for '{fn}' — "
+                f"with no confirmed read-only classification for \'{fn}\' — "
                 f"hal-spec.md §9.2a defaults an unclassified capability to "
                 f"energizing, so it requires a valid operator-issued confirm_token "
                 f"(capability={capability})", None)
 
+    # --- labgrid MCP (wq#4905) ---
+    if "labgrid" in server_l:
+        if fn in LABGRID_READ_ONLY_TOOLS:
+            return "GREEN", "", None
+        # Hard-RED: never green-lit, even with a token
+        if fn in LABGRID_HARD_RED_TOOLS or any(fn.startswith(p) for p in LABGRID_HARD_RED_PREFIXES):
+            return ("RED", f"{tool_name} is an unconditionally blocked labgrid "
+                    f"tool — ssh_run/put_file/flash_*/forward_* and place_delete "
+                    f"are never agent-accessible (hal-spec.md §9.2a)", None)
+        # release_place is hard-RED when kick=true
+        if fn == "release_place":
+            kick = (tool_input or {}).get("kick")
+            if kick is True or str(kick).lower() == "true":
+                return ("RED", f"{tool_name} with kick=true forcibly disconnects "
+                        f"another user's session — unconditionally blocked", None)
+        # Everything else on labgrid: RED unless valid energize-confirm token
+        capability = f"labgrid.{fn}"
+        if _energize is not None and _energize.verify_token(token, capability):
+            return "GREEN", "", None
+        return ("RED", f"{tool_name} is an unclassified labgrid capability "
+                f"(\'{fn}\') — hal-spec.md §9.2a defaults to energizing, "
+                f"requires a valid operator-issued confirm_token "
+                f"(capability={capability})", None)
+
+    # --- openocd / flashrom (existing) ---
     for key, tools in HARDWARE_ENERGIZE_MCP_TOOLS.items():
         if key not in server_l:
             continue
         capability = tools.get(fn)
         if not capability:
-            continue
+            # wq#5029: a tool on an explicitly classified hardware server that is
+            # not on its energizing list is read-only by that classification, so
+            # it stays GREEN. Falling through would hit the default-RED rule below
+            # and block openocd/flashrom read tools that were always allowed.
+            return "GREEN", "", None
         if _energize is not None and _energize.verify_token(token, capability):
             return "GREEN", "", None
         return ("RED", f"{tool_name} is an energizing hardware action "
                 f"(capability={capability}) and requires a valid operator-issued "
                 f"confirm_token (hal-spec.md §9.2a) — a model-supplied bool is "
                 f"not accepted", None)
+
+    # --- wq#4905: default-RED for unknown/unlisted MCP servers (fail-closed) ---
+    # Known software-only MCP servers pass GREEN; everything else is RED.
+    if server_l not in KNOWN_SOFTWARE_MCP_SERVERS:
+        return ("RED", f"{tool_name} is on MCP server \'{server}\' which has no "
+                f"classification in action_gate.py — hal-spec.md §9.2a: "
+                f"unclassified servers default to RED. Add '{server_l}' to "
+                f"KNOWN_SOFTWARE_MCP_SERVERS if it is a non-hardware server, "
+                f"or add an explicit hardware classification block.", None)
     return "GREEN", "", None
 
 
