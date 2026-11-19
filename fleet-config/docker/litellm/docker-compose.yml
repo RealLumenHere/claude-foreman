@@ -8,9 +8,17 @@ services:
     container_name: litellm
     restart: unless-stopped
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
+      - "172.17.0.1:4000:4000"
     volumes:
       - /home/lumen/agent/litellm_config.yaml:/app/config.yaml:ro
     command: ["--config", "/app/config.yaml", "--port", "4000"]
     env_file:
+      - /home/lumen/agent/.env
       - .env
+    networks:
+      - docker_default
+
+networks:
+  docker_default:
+    external: true
