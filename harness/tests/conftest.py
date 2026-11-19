@@ -18,6 +18,10 @@ def _load_root_conftest():
     import importlib.util
     import os
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "conftest.py")
+    if not os.path.exists(path):
+        # test_live_bin_guard copies this file into a tmp dir to run a child pytest on it; there is
+        # no repo root above that copy, and the child test touches neither recipes nor minerva.
+        return None
     spec = importlib.util.spec_from_file_location("_foreman_root_conftest", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -25,8 +29,9 @@ def _load_root_conftest():
 
 
 _root_conftest = _load_root_conftest()
-_isolate_recipe_store = _root_conftest._isolate_recipe_store
-_isolate_minerva_db_root = _root_conftest._isolate_minerva_db_root
+if _root_conftest is not None:
+    _isolate_recipe_store = _root_conftest._isolate_recipe_store
+    _isolate_minerva_db_root = _root_conftest._isolate_minerva_db_root
 
 
 @pytest.fixture(autouse=True)
