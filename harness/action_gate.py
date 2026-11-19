@@ -140,8 +140,11 @@ BUILTIN_RED = [
     (r'\brecovery\b[^|;&]*--wipe', "recovery wipe"),
     (r'(>|>>)\s*/dev/(sd|nvme|mmcblk|block/|mtd|mem)', "shell redirect onto block/MTD/mem device"),
     (r'\bof=/dev/(sd|nvme|mmcblk|block/|mtd|mem)', "dd/tool write onto block/MTD/mem device"),
-    (r'\b(cp|cat|tee|pv)\b[^|;&]*\s/dev/(sd[a-z]|nvme\d|mmcblk\d|block/|mtd\d|mem\b)',
-     "raw write onto block/MTD/mem device"),
+    # raw operand writes (`tee /dev/mtd0`, `cp fw.bin /dev/mtd0`) handled by
+    # _red_raw_device_write(): it needs the destination operand, not just token
+    # presence. The old direction-blind regex here also made `cat /dev/mtd0 >
+    # dump.bin` RED (wq#4906 finding C), against this class's own rule that
+    # read ops stay GREEN.
     (r'\bdrop\s+(table|database|schema)\b', "SQL DROP"),
     (r'\btruncate\s+table\b|\bsqlite3\b[^|;&]*\btruncate\b|\bpsql\b[^|;&]*\btruncate\b',
      "SQL TRUNCATE"),
@@ -158,10 +161,32 @@ BUILTIN_RED = [
 # Membership in THIS table is the floor tag (wq#4756) — put a new
 # one-time-irreversible pattern here, not in BUILTIN_RED above, which stays
 # judge-eligible for the general destructive-but-restorable class.
+#
+# Subcommand spelling (wq#4906 finding B): esptool/espefuse v5.0 renamed every
+# subcommand from underscores to dashes — upstream migration guide, "All the
+# commands and options have been renamed to use - instead of _ as a separator
+# (e.g., write_flash -> write-flash)", with the old names deprecated but still
+# accepted. The installed v4.7.0 accepts ONLY the underscore spelling (dashed
+# names exit 2, "invalid choice"), so an underscore-only regex goes blind the
+# day a v5 arrives via pip/pipx/apt or a venv. Every subcommand token below
+# therefore matches [_-] on each separator, and the tests cover both spellings.
 BUILTIN_HARDWARE_RED = [
     # wq#4746 (wq#4744 T1 gap-analysis §2(a)): eFuse burns are one-time and
     # irreversible — no verified backup makes a blown fuse undoable.
-    (r'\bespefuse(\.py)?\b[^|;&]*\bburn_\w+\b', "espefuse burn (one-time, irreversible eFuse write)"),
+    (r'\bespefuse(\.py)?\b[^|;&]*\bburn[_-]\w+\b',
+     "espefuse burn (one-time, irreversible eFuse write)"),
+    # wq#4906 finding A: the burn_* prefix misses espefuse's other three burn
+    # verbs, which were GREEN and unfloored on the installed v4.7.0.
+    # read/write-protect-efuse set protection bits by burning them — upstream:
+    # "Write protection prevents further changes of eFuse fields", and both
+    # subcommands' own --help reads "Name of efuse register to burn".
+    (r'\bespefuse(\.py)?\b[^|;&]*\b(read|write)[_-]protect[_-]efuse\b',
+     "espefuse read/write-protect-efuse (burns protection eFuses, irreversible)"),
+    # set-flash-voltage burns the VDD_SDIO eFuses — upstream: it "permanently
+    # sets the internal flash voltage regulator", and "Once an eFuse is burned
+    # it cannot be un-burned" (only OFF->1.8V->3.3V, never back).
+    (r'\bespefuse(\.py)?\b[^|;&]*\bset[_-]flash[_-]voltage\b',
+     "espefuse set-flash-voltage (permanently burns the VDD_SDIO eFuses)"),
 ]
 
 # RED-conditional "flash" class: blocked UNLESS the compiled rules declare a
@@ -179,7 +204,8 @@ BUILTIN_FLASH = [
     # spinor/spinand read, mtk.py r, nanddump, mtd_debug read, ...) are
     # deliberately left unmatched so they stay GREEN.
     (r'\bflashrom\b[^|;&]*\s-E\b', "flashrom erase"),
-    (r'\besptool(\.py)?\b[^|;&]*\b(write_flash|erase_flash|erase_region)\b',
+    # [_-] per the v5 dash rename documented on BUILTIN_HARDWARE_RED above.
+    (r'\besptool(\.py)?\b[^|;&]*\b(write[_-]flash|erase[_-]flash|erase[_-]region)\b',
      "esptool write/erase flash"),
     (r'\bopenocd\b[^|;&]*\bprogram\b', "openocd program"),
     (r'\bopenocd\b[^|;&]*\bflash\s+write_image\b', "openocd flash write_image"),
@@ -520,7 +546,7 @@ _PROTECT_WRAPPERS = frozenset({"sudo", "env", "nice", "ionice", "nohup", "comman
 # Flasher verbs that READ the device INTO a local file: aimed at a protected
 # path they overwrite the known-good dump with whatever the device holds now.
 _READ_INTO_FILE = [
-    r'\besptool(\.py)?\b.*\bread_flash\b',
+    r'\besptool(\.py)?\b.*\bread[_-]flash\b',
     r'\bflashrom\b.*\s(-r|--read)\b',
     r'\bst-flash\b.*\bread\b',
     r'\bstm32flash\b.*\s-r\b',
@@ -559,6 +585,47 @@ def _shell_segments(cmd):
         i += 1
     segs.append((words, redirs))
     return segs
+
+
+# wq#4906 finding C — raw block/MTD/mem device access, direction-aware.
+# Which argv slots a tool WRITES differs per tool: tee/sponge write every
+# operand, cp/install/rsync/mv write only the last one, and cat/pv/dd only ever
+# read theirs (their output leaves through a redirect, which the two
+# `> /dev/...` and `of=/dev/...` rows in BUILTIN_RED already catch). The
+# direction-blind regex those rows replaced classified `cat /dev/mtd0 >
+# dump.bin` and `cp /dev/mtd0 dump.bin` RED — flash dumps, which this class
+# deliberately keeps GREEN alongside nanddump and `mtd_debug read`.
+#
+# wq#4906 finding D, decided here: these stay in the judge-eligible BUILTIN_RED
+# class, NOT in BUILTIN_HARDWARE_RED. The hardware floor's criterion is a
+# one-time physically irreversible write (an eFuse); MTD flash and /dev/mem are
+# rewritable, so a raw write there is destructive-but-restorable, the same class
+# as `dd of=/dev/sda`. The conditional floor BUILTIN_FLASH applies to
+# flashcp/nandwrite is a different mechanism — it is unlocked by a declared
+# verified backup, and a bare `cp`/`tee` onto a device declares no such target.
+_RAW_DEVICE = re.compile(r'^/dev/(sd[a-z]|nvme\d|mmcblk\d|block/|mtd\d|mem$)')
+_DEV_WRITE_ALL_OPERANDS = frozenset({"tee", "sponge"})
+_DEV_WRITE_LAST_OPERAND = frozenset({"cp", "install", "rsync", "mv"})
+
+
+def _red_raw_device_write(target):
+    """RED reason if a segment writes a raw block/MTD/mem device by operand."""
+    for words, _redirs in _shell_segments(target):
+        argv = [w for w in words if w not in _PROTECT_WRAPPERS]
+        if not argv:
+            continue
+        tool = os.path.basename(argv[0])
+        operands = [w for w in argv[1:] if not w.startswith("-")]
+        if tool in _DEV_WRITE_ALL_OPERANDS:
+            dests = operands
+        elif tool in _DEV_WRITE_LAST_OPERAND:
+            dests = operands[-1:]
+        else:
+            continue
+        for dest in dests:
+            if _RAW_DEVICE.match(dest):
+                return f"{tool} raw write onto block/MTD/mem device {dest}"
+    return None
 
 
 def _path_candidates(word):
@@ -794,6 +861,9 @@ def classify_bash(cmd, rules, cwd=None):
             if re.search(pat, target, re.IGNORECASE):
                 return "RED", reason, None, False
         r = _red_rm_rf(target)
+        if r:
+            return "RED", r, None, False
+        r = _red_raw_device_write(target)
         if r:
             return "RED", r, None, False
     hw_class = bool(rules.get("hardware_class"))

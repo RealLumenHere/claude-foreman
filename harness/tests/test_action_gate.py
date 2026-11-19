@@ -62,6 +62,11 @@ RED_CASES = [
     "cat payload.bin > /dev/mem",
     # eFuse burn is unconditional RED (irreversible, no backup helps)
     "espefuse.py burn_efuse FLASH_CRYPT_CNT 1",
+    # wq#4906 finding C: operand writes onto a raw device, now direction-aware
+    "cp firmware.bin /dev/mtd0",
+    "tee /dev/mtd0",
+    "rsync -a firmware.bin /dev/mtd0",
+    "sudo cp firmware.bin /dev/sda",
 ]
 
 
@@ -439,6 +444,20 @@ def test_judge_enforce_hardware_floor_denies_project_rule(tmp_path):
 # one-time-irreversible row cannot land untested (wq#2630).
 HARDWARE_RED_CASES = [
     "espefuse.py burn_efuse FLASH_CRYPT_CNT 1",
+    # wq#4906 finding A: espefuse's non-burn_* burn verbs, GREEN and unfloored
+    # until this fix. Both spellings, per finding B (v5 dash rename).
+    "espefuse write_protect_efuse RD_DIS",
+    "espefuse.py read_protect_efuse BLOCK1",
+    "espefuse set_flash_voltage 1.8V",
+    "espefuse burn-efuse FLASH_CRYPT_CNT 1",
+    "espefuse burn-key BLOCK1 key.bin",
+    "espefuse burn-key-digest secure_boot_key.pem",
+    "espefuse burn-block-data BLOCK3 data.bin",
+    "espefuse burn-bit BLOCK3 1",
+    "espefuse burn-custom-mac AA:BB:CC:DD:EE:FF",
+    "espefuse write-protect-efuse RD_DIS",
+    "espefuse read-protect-efuse BLOCK1",
+    "espefuse set-flash-voltage 1.8V",
 ]
 
 
@@ -471,9 +490,23 @@ def test_judge_enforce_hardware_floor_denies_builtin_hardware_red(tmp_path, cmd)
     ("espefuse.py burn_efuse FLASH_CRYPT_CNT 1", True),
     # outside it: wq#4746's sibling verb, which landed in BUILTIN_FLASH
     ("esptool.py erase_flash", True),
+    # wq#4906 finding A: espefuse's other burn verbs, both spellings
+    ("espefuse write_protect_efuse RD_DIS", True),
+    ("espefuse write-protect-efuse RD_DIS", True),
+    ("espefuse read_protect_efuse BLOCK1", True),
+    ("espefuse set_flash_voltage 1.8V", True),
+    ("espefuse set-flash-voltage OFF", True),
+    # wq#4906 finding B: v5 dashed esptool write/erase, still BUILTIN_FLASH
+    ("esptool erase-flash", True),
+    ("esptool write-flash 0x0 firmware.bin", True),
     # outside it: plain destructive BUILTIN_RED stays judge-eligible
     ("mkfs.ext4 /dev/sdz", False),
     ("dd if=/dev/zero of=/dev/sda bs=4M", False),
+    # wq#4906 finding D, decided: a raw MTD/mem write is rewritable, not
+    # one-time irreversible, so it stays judge-eligible like dd of=/dev/sda.
+    ("cp firmware.bin /dev/mtd0", False),
+    ("tee /dev/mem", False),
+    ("cat firmware.bin > /dev/mtd0", False),
 ])
 def test_classify_bash_hw_floor_by_table(cmd, expect_floor):
     verdict, _reason, _snap, hw_floor = ag.classify_bash(cmd, {})
@@ -517,6 +550,18 @@ GREEN_CASES = [
     "flashrom -r dump.bin",
     "nanddump -f dump.bin /dev/mtd0",
     "mtd_debug read /dev/mtd0 0 1024 dump.bin",
+    # wq#4906 finding B: read verbs must stay GREEN in the v5 dashed spelling
+    # too — the [_-] widening must not drag reads into the write classes.
+    "esptool read-flash 0x0 0x1000 dump.bin",
+    "espefuse dump",
+    "espefuse get-custom-mac",
+    "espefuse check-error",
+    "espefuse adc-info",
+    # wq#4906 finding C: reading a raw device is a dump, not a write
+    "cat /dev/mtd0 > dump.bin",
+    "cp /dev/mtd0 dump.bin",
+    "pv /dev/mtd0 > dump.bin",
+    "rsync -a /dev/mtd0 /home/lumen/backups/",
 ]
 
 
@@ -1079,6 +1124,11 @@ FLASH_CLASS_RED_CASES = [
     "flashrom -p internal -E",
     "esptool.py write_flash 0x0 firmware.bin",
     "esptool.py erase_flash",
+    "esptool.py erase_region 0x0 0x1000",
+    # wq#4906 finding B: the v5.0 dashed spellings of the same three verbs
+    "esptool write-flash 0x0 firmware.bin",
+    "esptool erase-flash",
+    "esptool erase-region 0x0 0x1000",
     "openocd -f board.cfg -c 'program firmware.elf verify reset exit'",
     "openocd -f board.cfg -c 'flash erase_sector 0 0 last'",
     "st-flash write firmware.bin 0x8000000",
