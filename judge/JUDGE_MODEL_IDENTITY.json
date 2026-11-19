@@ -2,18 +2,34 @@
   "_why": "wq#2821: a LiteLLM rung name is not a model identity. On 2026-09-28 the wq#2815 bake-off re-tagged a qwen2.5-coder build as llama3.1:8b on hathor, so the pinned judge rung silently served a different model. bin/judge checks the served weights blob against this file and fails closed on mismatch.",
   "hathor-llama8b": {
     "ollama": "http://100.80.71.13:11434",
+    "node": "hathor",
     "tag": "llama3.1:8b",
     "blob_sha256": "667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29"
   },
   "wq2821-judge-llama8b": {
     "ollama": "http://100.80.71.13:11434",
+    "node": "hathor",
     "tag": "llama3.1:8b",
     "blob_sha256": "667b0c1932bc6ffc593ed1d03f895bf2dc8dc6df21db3042284a6f4416b06a29"
   },
   "nephthys-qwen14b": {
     "ollama": "http://100.98.74.87:11434",
+    "node": "nephthys",
     "tag": "qwen3:14b",
     "blob_sha256": "",
     "_pending": "wq#3792: nephthys has been offline per `tailscale status` (last seen 5d ago) for the whole life of this ticket, so /api/show was never reachable to capture the real served blob digest -- recorded in /home/lumen/kb/ISSUE-LOG.md rather than guessed (instinct 8: a fabricated hash is worse than none). An empty blob_sha256 makes verify_model_identity() fail closed on every call until the first successful /api/show after nephthys comes back fills in the real value -- correct per wq#2821's doctrine (fail closed on missing/unverifiable identity, never silently skip)."
+  },
+  "lumen-qwen25coder7b": {
+    "ollama": "http://localhost:11434",
+    "node": "lumen",
+    "tag": "qwen2.5-coder:7b",
+    "blob_sha256": "60e05f2100071479f596b964f89f510f057ce397ea22f2833a0cfe029bfc2463"
+  },
+  "nun1-qwen25coder7b": {
+    "ollama": "http://100.122.44.81:11434",
+    "node": "nun1",
+    "tag": "qwen2.5-coder:7b",
+    "blob_sha256": "60e05f2100071479f596b964f89f510f057ce397ea22f2833a0cfe029bfc2463",
+    "_note": "wq#5080: BC-250 nun1, judge primary. Same blob as lumen-qwen25coder7b (the fallback pin), verified via /api/show on both nodes 2026-11-18."
   }
 }

@@ -333,6 +333,38 @@ REACHABILITY_TIMEOUT_S = 5
 _FROM_RE = re.compile(r'^FROM\s+\S*sha256[-:]([0-9a-f]{64})', re.MULTILINE)
 
 
+LUMEN_STATE = "/home/lumen/minerva/lumen_state.py"
+_LIFECYCLE_RE = re.compile(r'^\s*\S+\.lifecycle\s*=\s*(\S+)', re.MULTILINE)
+
+
+def node_lifecycle(node, timeout=3):
+    """wq#5027: the node's lifecycle from lumen_state ('retired', 'active', ...),
+    or None if it cannot be read. Only used to word an error message, so it
+    never raises and never changes a verdict."""
+    if not node:
+        return None
+    try:
+        import subprocess
+        out = subprocess.run(["python3", LUMEN_STATE, "current", node], capture_output=True,
+                             text=True, timeout=timeout).stdout
+    except Exception:
+        return None
+    m = _LIFECYCLE_RE.search(out or "")
+    return m.group(1) if m else None
+
+
+def _describe_unreachable(model, ident):
+    """wq#5027: a bare 'URLError: timed out' hid that both judge pins sat on retired
+    Macs for weeks. Name the rung, the node and its endpoint, and say so loudly when
+    lumen_state has the node retired, so the fix (re-pin) is obvious from the queue row."""
+    node = ident.get("node")
+    where = f"{model} on {node} ({ident['ollama']})" if node else f"{model} at {ident['ollama']}"
+    life = node_lifecycle(node)
+    if life == "retired":
+        return f"{where}: node is RETIRED in lumen_state, re-pin the judge to a live rung"
+    return f"{where} unreachable" + (f", lifecycle={life}" if life else "")
+
+
 def verify_model_identity(model, required=False, timeout=5):
     """wq#2821: confirm the rung `model` is actually serving the pinned weights.
     Returns None if verified (or not listed and not required), else an error
@@ -352,7 +384,7 @@ def verify_model_identity(model, required=False, timeout=5):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             mf = json.loads(resp.read()).get("modelfile", "")
     except Exception as e:
-        return f"identity check failed ({type(e).__name__}: {e})"
+        return f"identity check failed ({_describe_unreachable(model, ident)}: {type(e).__name__}: {e})"
     m = _FROM_RE.search(mf)
     got = m.group(1) if m else None
     if got != ident["blob_sha256"]:
