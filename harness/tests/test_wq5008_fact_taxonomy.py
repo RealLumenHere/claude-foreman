@@ -243,7 +243,7 @@ def test_confirmed_but_stale_is_verified_and_denied():
 
 
 def test_probe_that_cannot_answer_is_blocked_not_unverifiable():
-    r = classify(fact("svc_status", "active", verify_recipe=None),
+    r = classify(fact("svc_status", "lumen-agent.service", verify_recipe=None),  # wq#5026: unit name
                  [ver("unknown", 1, probe="service_state")])
     assert r["status"] == ft.BLOCKED and "service_state" in r["blocked_by"]
     assert r["proof_ref"] is None
@@ -448,3 +448,48 @@ def test_cli_engines_and_json(state_db, tmp_path, monkeypatch, capsys):
     assert out["summary"]["facts"] == 5 and os.path.exists(tmp_path / "cli-ledger.db")
     assert ft.main(["engines"]) == 0
     assert "logic" in json.loads(capsys.readouterr().out)["refused"]
+
+
+# ------------------------------------------------------------------ wq#5026
+
+def test_wq5026_not_applicable_rows_are_ignored():
+    na = {"outcome": "unknown", "detail": "value 'LIVE' is not a systemd unit name"}
+    na2 = {"outcome": "unknown", "detail": "N/A: value 'x y' is not a probeable url"}
+    na3 = {"outcome": "unknown", "detail": "value 'lumen (key)' is not a login name"}
+    real = {"outcome": "unknown", "detail": "ssh apep: connect to host port 22: Connection timed out"}
+    assert ft._not_applicable(na) and ft._not_applicable(na2) and ft._not_applicable(na3)
+    assert not ft._not_applicable(real)
+    assert not ft._not_applicable(dict(na, outcome="confirmed"))
+
+
+def test_wq5026_retired_subject_blocked_probe_is_not_blocked():
+    ver = [{"probe": "plug_map", "observed": None, "outcome": "unknown", "ts": iso(NOW - 3600)}]
+    live = classify(fact("powers_node", "hathor", subject="p3"), ver)
+    assert live["status"] == ft.BLOCKED
+    gone = classify(fact("powers_node", "hathor", subject="p3"), ver, closed_subjects={"p3"})
+    assert gone["status"] != ft.BLOCKED and gone["probe"] is None
+
+
+def test_wq5026_load_facts_drops_na_rows(tmp_path):
+    db = tmp_path / "m.db"
+    c = sqlite3.connect(db)
+    c.execute("CREATE TABLE state_facts (id, subject, predicate, value, valid_from, valid_to,"
+              " last_confirmed_at, fact_class, source_kind, verify_recipe, verify_interval_days,"
+              " contradicted_at)")
+    c.execute("CREATE TABLE fact_verifications (id, fact_id, subject, predicate, probe, observed,"
+              " outcome, ts, detail)")
+    c.execute("INSERT INTO state_facts (id, subject, predicate, value, valid_from) VALUES"
+              " ('f1','a','status','LIVE','2026-01-01')")
+    c.execute("INSERT INTO fact_verifications VALUES ('v1','f1','a','status','service_state',NULL,"
+              "'unknown','2026-10-07T06:00:00+00:00','value ''LIVE'' is not a systemd unit name')")
+    c.commit(); c.close()
+    facts, ver = ft.load_facts(str(db))
+    assert len(facts) == 1 and ver == {}
+
+
+def test_wq5026_service_state_never_applies_to_free_text_status():
+    old = [{"probe": "service_state", "observed": None, "outcome": "unknown", "ts": iso(NOW - 3600)}]
+    assert classify(fact("status", "LIVE"), old)["status"] != ft.BLOCKED
+    assert classify(fact("status", "lumen-agent.service"), old)["status"] == ft.BLOCKED
+    assert classify(fact("url", "https://x.example/", ), [dict(old[0], probe="endpoint_live")])["status"] == ft.BLOCKED
+    assert classify(fact("url", "x -> CF Access"), [dict(old[0], probe="endpoint_live")])["status"] != ft.BLOCKED

@@ -404,8 +404,10 @@ def load_facts(db_path=None, subject=None):
         has_fv = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND "
                            "name='fact_verifications'").fetchone()
         if has_fv:
-            for r in c.execute("SELECT fact_id, probe, observed, outcome, ts FROM "
+            for r in c.execute("SELECT fact_id, probe, observed, outcome, ts, detail FROM "
                                "fact_verifications ORDER BY ts DESC"):
+                if _not_applicable(dict(r)):
+                    continue   # wq#5026: the probe never applied to this value
                 ver.setdefault(r["fact_id"], []).append(dict(r))
         return facts, ver
     finally:
@@ -444,10 +446,39 @@ def _operational_fn():
         return None
 
 
+# wq#5026: lumen-verify rows that say the probe could not APPLY to the fact's value (free-text
+# status is not a unit, prose url is not a URL, described ssh_user is not a login). Since
+# lumen-bin PR #298 the sweep writes no row for these (outcome n/a); older rows are ignored
+# here, so such a fact reads UNVERIFIABLE (no probe) instead of BLOCKED (failing probe).
+_NA_DETAIL_RE = re.compile(r"^(N/A: )?value .* is not (a systemd unit name|a probeable \w+|a login name)$",
+                           re.S)
+
+
+def _not_applicable(row):
+    return row.get("outcome") == "unknown" and bool(_NA_DETAIL_RE.match(row.get("detail") or ""))
+
+
+# Same unit-name shape lumen-verify's probe_service_state accepts (wq#2192). Before wq#2192
+# the probe ran `systemctl is-active <free text>` over ssh to the subject (memory_v3,
+# coreswitch, ...), so those September rows are inapplicable too: decide by the fact's
+# VALUE, not by the row's wording.
+_UNIT_NAME_RE = re.compile(r"[A-Za-z0-9:_.@\\-]+\.(service|socket|timer|mount|path|target)")
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _probe_applies(probe, fact):
+    val = (fact.get("value") or "").strip()
+    if probe == "service_state":
+        return bool(_UNIT_NAME_RE.fullmatch(val))
+    if probe == "endpoint_live":
+        return bool(_URL_RE.fullmatch(val)) if fact.get("predicate") == "url" else val.isdigit()
+    return True
+
+
 def probe_evidence(fact, verifications, now):
     """World-evidence reading for one fact -> dict or None (no probe owns it).
     state: confirmed | stale | blocked."""
-    rows = verifications or []
+    rows = [r for r in (verifications or []) if _probe_applies(r.get("probe"), fact)]
     assigned = bool(fact.get("verify_recipe")) or bool(rows)
     if not assigned:
         return None
@@ -521,6 +552,10 @@ def classify_fact(fact, verifications=None, now=None, closed_subjects=(),
     now = time.time() if now is None else now
     checks = run_engines(fact)
     probe = probe_evidence(fact, verifications, now)
+    if probe and probe["state"] == "blocked" and fact["subject"] in closed_subjects:
+        # wq#5026: a retired/decommissioned subject is not probed (lumen-verify skips it);
+        # its old `unknown` rows are not a failing probe. No world probe owns it any more.
+        probe = None
     decided = [c for c in checks if c["verdict"] in (PROVEN_TRUE, PROVEN_FALSE)]
     unavailable = [c for c in checks if c["verdict"] == UNAVAILABLE]
 
