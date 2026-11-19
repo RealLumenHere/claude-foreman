@@ -227,8 +227,8 @@ REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
 
 # A shape a committed file must keep whole, excused by exact (label, prefix, value_len)
 # — never by bare path, so a second shape in the same file still fires. Empty: every
-# committed fixture reads silently today (split at the boundary its rule reads, see
-# KV_LINE and harness/tests/fixtures/wq2687_values.py). A row added here needs the reason
+# committed fixture reads silently today or is excused below (the rest are split at the boundary
+# its rule reads, see KV_LINE and harness/tests/fixtures/wq2687_values.py). A row added here needs the reason
 # beside it and the value's sha256[:12] pinned in a fixture module the row cites.
 TRIPWIRE_CORPUS_EXCUSED = {
     # wq#3036: test_burn_filter.py's tree-wide anti-vacuity sweep
@@ -241,6 +241,18 @@ TRIPWIRE_CORPUS_EXCUSED = {
     # sha256[:12] (bf43137fb255) is pinned in that module's own docstring.
     "harness/tests/fixtures/wq3036_sweep_corpus.py": {
         ("kv-secret", "pending_rotation_secret = ", 29),
+    },
+    # wq#5030: two committed files whose credential-shaped strings ARE the content (a byte-identical
+    # tool-pin baseline whose tool names end in `key`; an injection benchmark whose payloads must
+    # look like credentials). Values pinned in fixtures/wq5030_tripwire_excused.py.
+    "ops/wq4945-mcp-name-collisions/fixtures/mcp-tool-pins-2026-11.json": {
+        ("kv-secret", 'browser_press_key": "', 64),
+        ("kv-secret", 'press_key": "', 64),
+    },
+    "security/agent_injection_bench/cases.json": {
+        ("kv-secret", "ANTHROPIC_API_KEY=", 15),
+        ("kv-secret", 'confirm_token": "', 26),
+        ("kv-secret", "confirm_token: ", 27),
     },
 }
 

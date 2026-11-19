@@ -41,7 +41,7 @@ the code fix.
    faith. Loaded `masking.mask_text` and fed it the id pytest would have generated *before*
    this fix (verified empirically by temporarily swapping in the parent commit's
    `test_masking.py`, running `--collect-only`, then restoring via `git checkout --`):
-   `test_..._bare_foreign_prefix...[2-cloudflare-cfut_-6-AKIA]` (pytest's default `-`-join) →
+   `test_..._bare_foreign_prefix...[2-cloudflare-cfut_<value>]` (pytest's default `-`-join) →
    `mask_text` returns `(..., ['cloudflare'])` — a real hit, because cloudflare's floor-6 body
    charset includes `-`, so `-6-AKIA` (7 chars) clears the floor right after `cfut_`. The fixed
    `+`-joined form, `[2-cloudflare+cfut_+6+AKIA]`, returns `(..., [])` — no hit, since `+` isn't
@@ -72,7 +72,8 @@ for anything that re-arms `masking.scan`. It failed after wq#3834 landed, with t
   (`masking.scan` on just that row) — it fires on its own, with or without wq#3834's commit.
   **Not caused by wq#3834; out of scope for this ticket** (belongs to wq#3778's lineage).
 - **Row 1294** (wq#3834's own `issue_log_append.py` closure row): its prose reads `"not a
-  credential: test_masking.py's lowercase-chain kv-secret fixture..."` — the generic kv-secret
+  credential:
+  test_masking.py's lowercase-chain kv-secret fixture..."` — the generic kv-secret
   chain rule matches `credential: ` glued directly to a lowercase dotted identifier regardless
   of the preceding negation. wq#3834's own doctrine-mandated audit entry re-armed the exact
   tripwire its fix exists to defuse. Verified in isolation the same way.

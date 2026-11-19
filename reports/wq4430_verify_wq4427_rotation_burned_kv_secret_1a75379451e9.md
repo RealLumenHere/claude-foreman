@@ -39,7 +39,8 @@ artifact is the ISSUE-LOG row plus `_runs/wq4427/evidence/attempt-1/replay-AC1.l
      func Auth(allowNoAuthorization ...bool) gin.HandlerFunc {
          allowNoToken := false
          if len(allowNoAuthorization) > 0 {
-             allowNoToken = allowNoAuthorization[0]
+             allowNoToken =
+             allowNoAuthorization[0]
          }
          return func(c *gin.Context) {
              tokenString, err := c.Cookie("Authorization")

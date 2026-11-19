@@ -12,7 +12,7 @@ ticket, fresh instance, no re-implementation).
 `mask_replay.py 4218` exit 0, 0 unaccounted. The `url-auth` hit (len=12,
 `sha256:9908cd3227cd`) is accounted to
 `reports/wq4218_verify_wq4206_execute_script_ssrf_bypass.md:21`, the
-`http://user:pass@8.8.8.8@127.0.0.1/` SSRF userinfo-stuffing test case from wq#4218's own
+`http://user:<value>@127.0.0.1/` SSRF userinfo-stuffing test case from wq#4218's own
 verify report — a self-authored fixture, not a leaked secret.
 
 ## What I checked
@@ -25,7 +25,7 @@ verify report — a self-authored fixture, not a leaked secret.
   text — `'http://user:MASKED@127.0.0.1/',  # userinfo trick`, with sibling
   `# tailnet range edge` comments — that does **not** textually match line 21 of the
   committed markdown report, which reads as prose:
-  `` (`http://user:pass@8.8.8.8@127.0.0.1/`). All correctly refused — ``. These are two
+  `` (`http://user:<value>@127.0.0.1/`). All correctly refused — ``. These are two
   different renderings (an ad-hoc python test list the worker ran interactively vs. the
   prose write-up), so a sloppy check could mistake this for a bad attribution — the
   "seen in" context and the "accounted" location are not the same text.
