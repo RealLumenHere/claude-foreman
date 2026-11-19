@@ -1,6 +1,18 @@
+import os
+import sys
+
 import pytest
 
-import live_bin_guard
+# wq#5135: put harness/ on sys.path here, not only as a side effect of other test modules.
+# `python3 -m pytest harness/tests/test_X.py` from the repo root imports this conftest before
+# any test module has run its own sys.path.insert, so the fixtures below that `import fworker`
+# errored at setup for every test in the file. Whole-suite runs hid it. The root conftest
+# deliberately puts no dir on sys.path (it loads its helpers by file), so this is the place.
+_HARNESS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _HARNESS_DIR not in sys.path:
+    sys.path.insert(0, _HARNESS_DIR)
+
+import live_bin_guard  # noqa: E402
 from id_mask import pytest_make_parametrize_id  # noqa: F401  (wq#3834 hook)
 
 live_bin_guard.install()
