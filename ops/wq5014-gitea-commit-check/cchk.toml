@@ -1,0 +1,23 @@
+# wq#5014 fleet commit policy, enforced by the Anubis Gitea pre-receive hook (hook.py).
+# Installed to /etc/lumen-commit-check/cchk.toml. Kept in step with lumen-pr's own lint
+# (CONV_TYPES, SUBJECT_RE), which is stricter (60-char subjects) so lumen-pr commits never trip it.
+[commit]
+conventional_commits = true
+# house style is lowercase descriptions ("fix(wq): refuse ...")
+subject_capitalized = false
+# heuristic; flags noun-phrase subjects such as "feat(x): QWED taxonomy for facts"
+subject_imperative = false
+subject_max_length = 80
+allow_commit_types = ["feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert"]
+allow_merge_commits = true
+allow_revert_commits = true
+allow_fixup_commits = false
+allow_wip_commits = false
+require_body = false
+# Ticket asks for true. OFF until the token-engine squash body carries Signed-off-by
+# (FOOTER_RE in token_engine_daemon.py drops it) and lumen-pr appends it; turning it on first
+# would refuse every `lumen-pr land`. Follow-up ticket filed with this bundle.
+require_signed_off_by = false
+# AI help is welcome when disclosed with Assisted-by:/Generated-by:; an AI tool credited as
+# Co-authored-by: (or as the author) is refused. Matches lumen-pr's wq#4798 house rule.
+ai_attribution = "disclose"

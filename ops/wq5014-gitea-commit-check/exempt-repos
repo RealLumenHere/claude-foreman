@@ -1,0 +1,2 @@
+# wq#5014: repos exempt from the commit policy (data syncs, not code). owner/name per line.
+lumen/obsidian-vault   # auto: fleet memory sync (obsidian git-sync, wq2442)
