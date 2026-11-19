@@ -32,7 +32,12 @@ INSTINCTS_PATH = os.environ.get("FOREMAN_INSTINCTS_PATH", "/home/lumen/instincts
 # 8 fit. instincts.yaml is proposal-only standing law, so the cap moved, not the
 # rule text. chars/4 is the house estimate (research/TOKEN_BASELINE.md); rules
 # beyond the cap are dropped whole, loudly.
-TIER0_TOKEN_BUDGET = 750
+# wq#5030: the live file grew again, to 9 tier-0 rules (~827 tok with header; wq#3660 repeated).
+# At 750 the cap silently dropped the last rule (fabricated-evidence) from every fworker
+# prompt, and test_live_tier0_fits_budget_no_rule_dropped had been red since. Same remedy as
+# wq#3660, for the same reason: instincts.yaml is proposal-only standing law, so the cap
+# moves, not the rule text. ~8% headroom, as then.
+TIER0_TOKEN_BUDGET = 900
 
 # CLI exit codes for --audience, matching bin/instincts-render's (claude_context.sh
 # --core's case statement reads them): nothing to inject vs a corpus it cannot read.

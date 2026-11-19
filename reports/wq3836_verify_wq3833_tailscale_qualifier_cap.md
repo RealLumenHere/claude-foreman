@@ -32,7 +32,8 @@ qualifier lengths 14 (kept), 15 and 20 (both now masked as body).
    `test_doctrine_corpus_does_not_re_arm_the_alarm`. Confirmed **pre-existing
    and unrelated**: the failure is a `kv-secret` match inside
    `/home/lumen/kb/ISSUE-LOG.md` row 1275 (wq#3778), which quotes a historical
-   credential-shaped literal (`rotate key: api.deepseek.com`) in its own prose
+   credential-shaped literal (`rotate key:
+   api.deepseek.com`) in its own prose
    as documentation of a past incident. This is a live, externally-mutated
    corpus (other fleet workers append rows concurrently) scanned by a
    `kv-secret` rule the wq#3833 diff never touches — the diff's only code

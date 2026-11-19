@@ -29,9 +29,9 @@ PATCH = os.path.join(REPO, "ops", "wq1478-liveness-gate", "apply_wq_patch.py")
 # deliberately in their own PR.
 PINS = {
     ("capability", "preflight"): "8e3389ed43fc3af6",   # re-pinned wq#2184 (advisory_paths)
-    ("capability", "policy_grants"): "dd24830cd3332572",   # re-pinned wq#3222 (wq#3200 peer_targets, 0354e642)
+    ("capability", "policy_grants"): "15f3b77322d66603",   # re-pinned wq#5030 (wq#4762 needs:repo grants, 76a707b1; before: dd24830cd3332572, wq#3222/wq#3200 peer_targets 0354e642)
     ("capability", "effective_needs"): "41c72c0c490ad732",
-    ("capability", "effective_add_dirs"): "27b2e12bab76c1fd",
+    ("capability", "effective_add_dirs"): "36af45a2f72a042d",   # re-pinned wq#5030 (wq#4623 repo primary, 43644a32; before: 27b2e12bab76c1fd)
     ("fworker", "resolve_exec_grant"): "7fec5cd04368e6a5",   # re-pinned wq#3222 (grant file 0400->0444 for tokeneng, wq#2270)
     ("fworker", "assert_spawn_capability"): "d94068f91c6bcf78",   # re-pinned wq#2184
 }

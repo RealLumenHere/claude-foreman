@@ -226,6 +226,8 @@ def test_set_field_keeps_comments_and_touches_only_the_named_row():
     new = ed.set_field(new, "isis", "prefill_tps", 71.5, family="qwen36-local")
     assert yaml.safe_load(new)["nodes"]["isis"]["state"] == "retired"
     assert yaml.safe_load(new)["nodes"]["isis"]["models"][0]["prefill_tps"] == 71.5
-    assert "out of service, wq#2140" in new and "71.5            # bench 63" in new
+    # the trailing comments survive the edit byte for byte (padding included); wq#3794 replaced the
+    # old `# bench 63` note on isis prefill_tps with a `# wq#3794: cleared ...` one
+    assert "out of service, wq#2140" in new and "71.5          # wq#3794: cleared" in new
     assert yaml.safe_load(new)["nodes"]["hathor"] == yaml.safe_load(text)["nodes"]["hathor"]
     assert new.count("\n") == text.count("\n")

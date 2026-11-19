@@ -210,18 +210,26 @@ RETIRE_HEAD_OLD = r'''    target = a.target.strip()
 # instead of being half-patched. Anchors are taken from the wq#1479-patched wq (owner_ok /
 # _finish refusals already on stderr via eprint) since that patch is already live.
 PATCHES = [
-    ("identity-constants",
-     'NTFY_BIN = os.environ.get("WQ_NTFY_BIN", "/home/lumen/bin/ntfy-send")\n'
-     'SESSION_RE = re.compile(r"^(?P<base>.+)-(?P<sid>[0-9a-f]{6})$")\n',
+    # wq#5030: this used to be ONE patch spanning NTFY_BIN..SESSION_RE as a contiguous block. wq#4761
+    # then put GRANT_TTL_HOURS between the two halves, so neither the old nor the new block matched
+    # (MISSING-ANCHOR) although the live wq carried every constant: `--check` reported unpatched and
+    # `--apply` refused, and test_the_live_wq_is_still_patched could never go green. Two patches,
+    # each anchored on ONE line, produce the same bytes on an unpatched wq and survive anything
+    # inserted between them.
+    ("identity-constants-fworker-re",
+     'NTFY_BIN = os.environ.get("WQ_NTFY_BIN", "/home/lumen/bin/ntfy-send")\n',
      'NTFY_BIN = os.environ.get("WQ_NTFY_BIN", "/home/lumen/bin/ntfy-send")\n'
      '# wq#1498: fworker.wq_identity(ticket_id) mints this STABLE per-ticket name (harness/fworker.py)\n'
-     '# and claims under it on every attempt for that ticket — it is never a dead session, only ever a\n'
+     '# and claims under it on every attempt for that ticket \u2014 it is never a dead session, only ever a\n'
      '# currently-idle one. `wq retire` on it plants a permanent retired_sessions row that refuses\n'
      '# every FUTURE spawn for the same ticket too. Env-overridable so tests can probe the boundary\n'
      '# without hardcoding the shape twice.\n'
      'FWORKER_IDENTITY_RE = re.compile(\n'
-     '    os.environ.get("WQ_FWORKER_IDENTITY_RE", r"^fworker-wq\\d+$"))\n'
-     '# wq#1498: `lumen-run list` unit column, e.g. "lumen-job-fworker-wq616-1786850106.service" —\n'
+     '    os.environ.get("WQ_FWORKER_IDENTITY_RE", r"^fworker-wq\\d+$"))\n',
+     1),
+    ("identity-constants-lumen-run",
+     'SESSION_RE = re.compile(r"^(?P<base>.+)-(?P<sid>[0-9a-f]{6})$")\n',
+     '# wq#1498: `lumen-run list` unit column, e.g. "lumen-job-fworker-wq616-1786850106.service" \u2014\n'
      "# mirrors harness/concurrency.py's UNIT_RE so a --dead-worker liveness check reads the exact\n"
      '# same signal the dispatcher\'s own concurrency cap does, instead of inventing a second one.\n'
      'LUMEN_RUN_UNIT_RE = re.compile(r"lumen-job-(?P<name>\\S+?)-\\d+\\.service")\n'

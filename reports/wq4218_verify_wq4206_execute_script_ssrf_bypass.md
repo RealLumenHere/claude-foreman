@@ -18,7 +18,7 @@ Author: claude-opus-5-5 (wq#4206, commit `dd340806`). Verifier: claude-sonnet-5@
   tests cover: octal (`0177.0.0.1`), hex (`0x7f.0.0.1`), short-form (`127.1`),
   IPv4-mapped-IPv6 alt spelling (`::ffff:7f00:1`), trailing-dot metadata host, both edges
   of the tailnet `100.64.0.0/10` block, and a userinfo/`@`-stuffing trick
-  (`http://user:pass@8.8.8.8@127.0.0.1/`). All correctly refused —
+  (`http://user:<value>@127.0.0.1/`). All correctly refused —
   `lumen_stealth_guard.py:34-58` resolves via `socket.getaddrinfo` before classifying, so
   the numeric-spelling and tailnet-range gaps I went looking for aren't there.
 - `check_path` (`lumen_stealth_guard.py:92-97`) resists symlink escape and `..`

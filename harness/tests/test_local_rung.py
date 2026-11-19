@@ -61,7 +61,8 @@ def test_large_ctx_local_models_registered_and_trusted_for_standard_engineering(
         assert fworker.local_rung_gate(mid, "mechanical-edit") == (True, None)
         allow, reason = fworker.local_rung_gate(mid, "rca-investigation")
         assert allow is False and "not trusted" in reason
-    assert rows["qwen36-local"]["context_tokens"] == 8192
+    # 8192 -> 16384 in 300fee1b (isis qwen36 served_ctx); still too small for a full fworker prompt
+    assert rows["qwen36-local"]["context_tokens"] == 16384
     assert fworker.local_rung_gate("qwen36-local", "standard-engineering")[0] is False
 
 

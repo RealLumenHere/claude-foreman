@@ -43,7 +43,9 @@ def test_local_allowed_archetypes_match_pre_wq1301_constant():
     local = {name for name in spec.names() if spec.get(name).local_allowed}
     assert local == {"mechanical-edit", "probe-build"}
     assert spec.get("mechanical-edit").local_max_turns == 10
-    assert spec.get("probe-build").local_max_turns == 15
+    # 15 -> 40 on purpose (c9b7a75c, 2026-10-08 subtraction-phase2): 15 starved deepseek-v4-flash
+    # at the lumen-pr step. The pre-wq#1301 pin that matters is the allowed SET above.
+    assert spec.get("probe-build").local_max_turns == 40
 
 
 def test_rca_investigation_keeps_doubled_wall_clock():

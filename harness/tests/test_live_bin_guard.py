@@ -117,7 +117,7 @@ def test_a_live_spawn_fails_the_test_that_made_it(tmp_path):
     """End to end through a child pytest on a copy of this conftest: the offending test
     fails by name and the run exits non-zero even though the code under test swallowed
     the OSError (the fail-open shape every alert call site has)."""
-    for f in ("conftest.py", "live_bin_guard.py"):
+    for f in ("conftest.py", "live_bin_guard.py", "id_mask.py"):  # conftest imports id_mask (wq#3834)
         shutil.copy(os.path.join(HERE, f), tmp_path / f)
     (tmp_path / "test_leak.py").write_text(
         "import os, subprocess\n"

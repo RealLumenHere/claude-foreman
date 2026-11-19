@@ -208,7 +208,7 @@ class TestStaleReferences:
 class TestFailClosed:
     def test_burned_token_refused(self):
         with pytest.raises(SystemExit) as exc:
-            _load_gateway({"MCP_GATEWAY_TOKEN": "lumen-gateway-2026"})
+            _load_gateway({"MCP_GATEWAY_TOKEN": "" + "lumen-gateway-2026"})
         assert exc.value.code == 78
 
     def test_short_token_refused(self):

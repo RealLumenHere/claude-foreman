@@ -92,6 +92,11 @@ def test_check_artifacts_done_hands_back_the_commit_it_found(monkeypatch, tmp_pa
     head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
                           capture_output=True, text=True, check=True).stdout.strip()
 
+    # wq#5030: wq#4242 is a real ticket; its live run dir carries an acceptance/evidence doc whose
+    # citations do not resolve in THIS scratch repo. Read run dirs from an empty root instead.
+    import acceptance
+    monkeypatch.setattr(fworker, "RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setattr(acceptance, "RUNS_ROOT", str(tmp_path / "runs"))
     monkeypatch.setattr(fworker, "evidence_rejected", lambda tid: False)
     monkeypatch.setattr(fworker, "wq_show", lambda tid: {"status": "in_progress"})
     assert fworker.check_artifacts_done(4242, str(repo)) == (True, head)

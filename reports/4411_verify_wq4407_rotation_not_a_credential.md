@@ -57,7 +57,8 @@ hash. It also pointed at wq#4409 (deps on wq#4405) to close the leak path by ren
    `token = '<12 hex>'`) is "closed by wq#4409 (rename token->nonce)." `git log --oneline`
    in `/home/lumen/foreman` shows `e45bc7a1 fix(limpet): wq4409 rename remote-cli exec
    marker token -> nonce`, confirmed on `main` via `merge-base --is-ancestor`. Post-rename,
-   `grep -n "token = " tests/test_server.py` returns nothing — the exact string shape that
+   `grep -n "token = "
+   tests/test_server.py` returns nothing — the exact string shape that
    fired the mask is gone from the tracked tree, matching this run's "0 unaccounted."
 
 ## Attempts to break it

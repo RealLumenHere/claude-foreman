@@ -628,7 +628,10 @@ def test_stop_hook_honours_the_hook_contract_as_a_real_subprocess(worktree, tmp_
     acceptance.pin(str(worktree), str(tmp_path), _acceptance_doc())
     env = dict(os.environ, FOREMAN_WORKTREE_ROOT=str(worktree),
                FOREMAN_STOP_GATE_STATE=str(tmp_path / "stop-gate.json"),
-               FOREMAN_WQ_BIN="/bin/false", FOREMAN_TICKET_ID="4242")
+               FOREMAN_WQ_BIN="/bin/false", FOREMAN_TICKET_ID="4242",
+               # wq#5030: wq#4242 is a real ticket whose live _runs/wq4242/acceptance.json decide()
+               # prefers over the pinned worktree copy; an empty runs root makes it fall back.
+               FOREMAN_RUNS_ROOT=str(tmp_path / "runs"))
     p = subprocess.run([sys.executable, os.path.join(HARNESS_DIR, "hooks", "stop_gate.py")],
                        input=json.dumps({"session_id": "s1", "cwd": str(worktree)}),
                        capture_output=True, text=True, env=env)
