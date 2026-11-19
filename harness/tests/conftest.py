@@ -6,6 +6,29 @@ from id_mask import pytest_make_parametrize_id  # noqa: F401  (wq#3834 hook)
 live_bin_guard.install()
 
 
+# wq#5030: the repo-root conftest.py holds the two fixtures that keep a test run off PROD state
+# (_isolate_recipe_store -> FOREMAN_RECIPE_PG=off, _isolate_minerva_db_root -> scratch minerva.db),
+# but pytest only collects it when the run's rootdir reaches the repo root. `cd harness && pytest
+# tests` does not, and then fworker's real record_outcome() writes the live fleet_memory
+# `recipes` table (test-fix / claude-sonnet-5 / standard-engineering carried 50 junk outcomes
+# when this was found) and seven tests fail on the missing env. Re-export them here by file, the
+# way the root conftest loads live_bin_guard, so both invocations are isolated. Same function
+# objects: a root run that also collects the root conftest still gets each fixture once.
+def _load_root_conftest():
+    import importlib.util
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "conftest.py")
+    spec = importlib.util.spec_from_file_location("_foreman_root_conftest", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_root_conftest = _load_root_conftest()
+_isolate_recipe_store = _root_conftest._isolate_recipe_store
+_isolate_minerva_db_root = _root_conftest._isolate_minerva_db_root
+
+
 @pytest.fixture(autouse=True)
 def _hallucination_guard_off(monkeypatch):
     """The guard defaults to advisory, which calls live isis ollama from every verify()

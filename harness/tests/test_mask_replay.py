@@ -12,6 +12,7 @@ The live pin at the bottom is wq#2307's own verdict, kept executable: wq#2288's
 transcript held 13 credential-shaped strings and every one of them is committed
 source.
 """
+import glob
 import hashlib
 import io
 import json
@@ -28,6 +29,12 @@ import mask_replay
 import masking
 
 
+def _transcripts_on_host(ticket_id):
+    """wq#5030: does at least one of the ticket run's CLI transcripts still exist?"""
+    return any(glob.glob(os.path.join(mask_replay.PROJECTS_ROOT, "*", f"{sid}.jsonl"))
+               for sid in mask_replay.session_ids(ticket_id))
+
+
 def _skip_if_masked_at_rest(ticket_id, lost):
     """wq#3222: call where a pin failed to reproduce. The run-dir skipifs below cover a
     run whose evidence left the host; this covers a run whose evidence was rewritten on
@@ -39,6 +46,11 @@ def _skip_if_masked_at_rest(ticket_id, lost):
     before."""
     if not lost:
         return
+    # wq#5030: the CLI prunes old transcripts outright (the sweep state still lists them), so a
+    # pin that came from a transcript can be gone because the FILE is gone, not rewritten.
+    if not _transcripts_on_host(ticket_id):
+        pytest.skip(f"wq#{ticket_id}'s CLI transcript(s) are no longer on this host; pinned values "
+                    f"that came from them cannot be replayed")
     try:
         with open(mask_at_rest.STATE_PATH) as fh:
             swept = json.load(fh).get("transcripts", {})
@@ -917,6 +929,7 @@ def test_wq2253_sk_key_is_absent_from_the_model_context():
         if hits:
             found[source] = hits
     assert found == {WQ2253_DOCTRINE_SNAPSHOT: set(WQ2253_SK_KEY)}
+    _skip_if_masked_at_rest(2253, not [s for s in items if s.startswith("transcript:")])
     assert [s for s in items if s.startswith("transcript:")], \
         "the model's own context must be in the corpus for the above to mean anything"
     reads = [s for s in items if "kb/ISSUE-LOG.md@" in s]
@@ -985,6 +998,7 @@ def test_wq2300_transcript_burned_nothing():
     assert records, "wq#2300's artefacts should still reproduce the hit"
     assert mask_replay.unaccounted(records) == []
     kv = {r["value_sha256_12"]: r for r in records if r["label"] == "kv-secret"}
+    _skip_if_masked_at_rest(2300, not WQ2300_KV.items() <= {h: r["value_len"] for h, r in kv.items()}.items())
     assert WQ2300_KV.items() <= {h: r["value_len"] for h, r in kv.items()}.items()
     # the load-bearing half: `unaccounted` also forgives a value today's table stopped
     # reading, and it stopped reading the 17, so that half would pass vacuously.
@@ -1445,6 +1459,7 @@ def test_wq2278_attempt_2_alarm_burned_nothing():
     A failure here means one of these values has left the tree, and the run deserves a
     fresh look."""
     items = mask_replay.corpus(2278)
+    _skip_if_masked_at_rest(2278, WQ2348_TRANSCRIPT not in items)
     assert WQ2348_TRANSCRIPT in items, "attempt 2's own context must be in the corpus"
     records = mask_replay.replay(2278,
                                  items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
@@ -1484,6 +1499,7 @@ def test_the_live_rules_would_not_have_filed_wq2348():
     the daemon suite's `TAPO_PASS=` fixture, which the `_PASS` noun now reads and which
     is likewise committed (token-engine/tests/test_daemon.py)."""
     items = mask_replay.corpus(2278)
+    _skip_if_masked_at_rest(2278, WQ2348_TRANSCRIPT not in items)
     records = mask_replay.replay(2278, patterns=mask_replay.CURRENT_PATTERNS,
                                  items={WQ2348_TRANSCRIPT: items[WQ2348_TRANSCRIPT]})
     live = [r for r in records if r["label"] in WQ2348_LABELS]
