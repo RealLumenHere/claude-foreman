@@ -46,6 +46,7 @@ length, 12 hex of its sha256, and the matching line with the value spliced out.
 
     python3 harness/mask_replay.py 2288             # auto: dated by the run's own start
     python3 harness/mask_replay.py 2288 --rules legacy   # force the table that filed it
+    python3 harness/mask_replay.py capture-fixture 2288  # freeze its transcript evidence (wq#5134)
 
 Exit 0: every value is accounted for in the tree — nothing to rotate. Exit 1: at least
 one is not. Exit 2: the run left no corpus to replay.
@@ -90,6 +91,20 @@ DOCTRINE_TRACKED = [os.environ.get("FOREMAN_DOCTRINE_LOG",
 # resumed attempt keeps its id across worktrees, and the id is what episode.jsonl has.
 PROJECTS_ROOT = os.environ.get("CLAUDE_PROJECTS_ROOT",
                                os.path.expanduser("~/.claude/projects"))
+
+# wq#5134: the CLI prunes old transcripts, and lumen-mask-at-rest rewrites the rest, so
+# a pin taken off a transcript decays to a skip (30 of them by wq#5030). The durable
+# copy is committed with the pin: the transcript-sourced replay RECORDS — label, kept
+# prefix, length, sha256[:12], masked context, accounting — under both bundled tables.
+# That is everything a pin asserts on and nothing a value can be recovered from.
+# Written by capture_fixture(); read back by corpus() as a `frozen:` item when the
+# live transcript is gone, and expanded by replay() without scanning its text.
+FIXTURE_ROOT = os.environ.get(
+    "FOREMAN_MASK_FIXTURES",
+    os.path.join(REPO_ROOT, "harness", "tests", "fixtures", "mask_replay"))
+FIXTURE_FIELDS = ("label", "prefix", "value_len", "value_sha256_12", "first_seen_in",
+                  "faithful", "accounted_in", "still_matches_today", "today_closed",
+                  "line")
 
 # harness/masking.py at aa52797 — the rules that were live from 22:09 to 22:35 on
 # 2026-09-20, which is when most of the open rotation backlog was filed. Frozen
@@ -301,7 +316,115 @@ def corpus(ticket_id):
             text = _read(path)
             if text:
                 items[f"transcript:{sid}"] = text
+    # wq#5134: a session whose transcript is gone is answered from the pin's fixture.
+    # Last, like the transcript it stands in for, so it re-attributes nothing.
+    # "Gone" is missing OR changed since capture: lumen-mask-at-rest rewrites a
+    # transcript in place, which keeps the file and drops exactly the values pinned.
+    frozen = load_fixture(ticket_id)
+    if frozen:
+        shas = frozen.get("session_sha256") or {}
+        gone = [sid for sid in frozen.get("sessions", [])
+                if f"transcript:{sid}" not in items
+                or (sid in shas and _sha256(items[f"transcript:{sid}"]) != shas[sid])]
+        if gone:
+            items[f"frozen:wq{ticket_id}"] = json.dumps(dict(frozen, gone=gone))
     return items
+
+
+def _sha256(text):
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
+def fixture_path(ticket_id, root=None):
+    return os.path.join(FIXTURE_ROOT if root is None else root, f"wq{ticket_id}.json")
+
+
+def load_fixture(ticket_id, root=None):
+    """wq#5134: the committed frozen transcript evidence for wq<id>'s pins, or None."""
+    try:
+        with open(fixture_path(ticket_id, root)) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) and isinstance(doc.get("records"), dict) else None
+
+
+class FixtureError(Exception):
+    pass
+
+
+def capture_fixture(ticket_id, root=None, tracked=None):
+    """Freeze wq<id>'s transcript evidence as a committed fixture; return its path.
+
+    Run when a verdict taken off a transcript is pinned, while the transcript still
+    exists. Records are replayed from the transcript items alone (so `first_seen_in`
+    names the session) under BOTH bundled tables, because a pin may score either.
+    The file is refused, not written, if anything in it still reads as a credential to
+    today's masker: the records are value-free by construction (replay never returns a
+    value, and `line` is spliced then masked), and this proves it on the actual bytes.
+    """
+    items = corpus(ticket_id)
+    transcripts = {k: v for k, v in items.items() if k.startswith("transcript:")}
+    if not transcripts:
+        raise FixtureError(f"wq#{ticket_id}: no live transcript on this host; a fixture "
+                           f"can only be captured while one exists")
+    tracked = tracked_text() if tracked is None else tracked
+    records = {}
+    for name, table in (("legacy", LEGACY_PATTERNS), ("current", CURRENT_PATTERNS)):
+        recs = replay(ticket_id, patterns=table, tracked=tracked, items=transcripts,
+                      rotated={})
+        records[name] = [dict({f: r.get(f) for f in FIXTURE_FIELDS},
+                              prefix=masking.mask_text(r.get("prefix") or "")[0])
+                         for r in recs]
+    doc = {
+        "ticket": int(ticket_id),
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "tree": _git(REPO_ROOT, "rev-parse", "--short=12", "HEAD").strip() or None,
+        "sessions": sorted(k.split(":", 1)[1] for k in transcripts),
+        "session_sha256": {k.split(":", 1)[1]: _sha256(v) for k, v in transcripts.items()},
+        "records": records,
+        "note": "frozen replay records (wq#5134): hashes, lengths, masked context; "
+                "no value. accounted_in is as of capture and cannot be re-scored.",
+    }
+    text = json.dumps(doc, indent=1, sort_keys=True) + "\n"
+    hits = masking.mask_text(text)[1]
+    orphans = masking._orphan_matches(text)
+    if hits or orphans:
+        raise FixtureError(f"wq#{ticket_id}: refusing to write a fixture that still "
+                           f"reads as {len(hits) + len(orphans)} credential(s)")
+    path = fixture_path(ticket_id, root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, path)
+    return path
+
+
+def _frozen_records(text, patterns, rotated):
+    """Records a `frozen:` corpus item stands for, under `patterns` (wq#5134).
+
+    Only the two bundled tables were captured; any other table (mask_triage's
+    historic revisions) gets nothing from a fixture rather than the wrong table's
+    answer. Only records first seen in a session that is actually gone come back."""
+    if patterns is LEGACY_PATTERNS:
+        name = "legacy"
+    elif patterns is CURRENT_PATTERNS:
+        name = "current"
+    else:
+        return []
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return []
+    gone = {f"transcript:{sid}" for sid in doc.get("gone", [])}
+    out = []
+    for rec in doc.get("records", {}).get(name, []):
+        if rec.get("first_seen_in") not in gone:
+            continue
+        out.append(dict(rec, first_seen_in=f"frozen:{rec['first_seen_in']}",
+                        frozen=True, rotated=rotated.get(rec.get("value_sha256_12"))))
+    return out
 
 
 def _parse_ts(value):
@@ -736,6 +859,13 @@ def replay(ticket_id, patterns=None, tracked=None, items=None, verdict=None,
     recorded = set(recorded_hits(ticket_id))
     records, seen = [], set()
     for source, text in items.items():
+        if source.startswith("frozen:"):
+            have = {(r["label"], r["value_sha256_12"]) for r in records}
+            for rec in _frozen_records(text, patterns, rotated):
+                if (rec["label"], rec["value_sha256_12"]) not in have:
+                    have.add((rec["label"], rec["value_sha256_12"]))
+                    records.append(rec)
+            continue
         for label, prefix, value, lo, hi in _located(patterns, text, skip_masked):
             if (label, value) in seen:
                 continue
@@ -846,6 +976,8 @@ def suppressed_records(ticket_id, items=None):
     if rows:
         return rows
     for source, text in (corpus(ticket_id) if items is None else items).items():
+        if source.startswith("frozen:"):
+            continue
         rows += [dict(r, source=source, derived=True)
                  for r in masking.suppressions(text)]
     seen, out = set(), []
@@ -990,6 +1122,18 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv[:1] == ["record-rotated"]:
         return main_record_rotated(argv[1:])
+    if argv[:1] == ["capture-fixture"]:
+        ap = argparse.ArgumentParser(prog="mask_replay.py capture-fixture",
+                                     description=capture_fixture.__doc__.splitlines()[0])
+        ap.add_argument("ticket", type=int)
+        ap.add_argument("--root", default=None, help="default: %s" % FIXTURE_ROOT)
+        a = ap.parse_args(argv[1:])
+        try:
+            print(capture_fixture(a.ticket, root=a.root))
+        except FixtureError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        return 0
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("ticket", type=int, help="ticket id of the run that fired")

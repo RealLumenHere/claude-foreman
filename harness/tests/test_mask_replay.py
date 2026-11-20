@@ -48,6 +48,11 @@ def _skip_if_masked_at_rest(ticket_id, lost):
         return
     # wq#5030: the CLI prunes old transcripts outright (the sweep state still lists them), so a
     # pin that came from a transcript can be gone because the FILE is gone, not rewritten.
+    # wq#5134: a pin with a committed fixture (mask_replay.capture_fixture) is answered
+    # from it by corpus()/replay() whatever happened to the live transcript, so it never
+    # skips: its own assertion decides. Only a pre-fixture pin may still skip below.
+    if mask_replay.load_fixture(ticket_id) is not None:
+        return
     if not _transcripts_on_host(ticket_id):
         pytest.skip(f"wq#{ticket_id}'s CLI transcript(s) are no longer on this host; pinned values "
                     f"that came from them cannot be replayed")
