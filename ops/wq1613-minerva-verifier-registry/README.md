@@ -88,3 +88,21 @@ clobber `url`/`port`/`ram`/`storage` facts) landed after it, so the live `lumen-
 commit behind and `install.sh --verify` exited 1. Once wq#2206 confirmed wq#2204, `install.sh`
 was rerun as a detached `lumen-run` unit (42 tests passed, `repair_clobbered_facts.py` repaired
 0 facts, exit 0) and `install.sh --verify` printed `VERIFY OK` (also as a unit, exit 0).
+
+## Canonical sources (wq#5155, 2026-11-19)
+
+Development of both installed files moved out of this bundle: `lumen-verify` lives in lumen-bin
+(`/home/lumen/bin`, e.g. d7e8e8c wq#1688 identity, 8ce6a10 wq#5026 n/a) and `registry.yaml` in
+minerva (`verify/registry.yaml`). The copies here had fallen 220+ lines behind, and `install.sh`
+would have rolled both live files back. Now:
+
+- `install.sh --sync` copies both from their repos' `origin/main` (commit the result).
+- `install.sh` refuses (exit 3) while either copy differs from its canonical `origin/main`.
+- `install.sh --verify` reports that drift as a MISS (vfile alone had called it "superseded").
+- `ops/tests/test_wq5155_lumen_verify_canonical.py` fails when a copy drifts.
+- `install.sh` no longer re-enables `lumen-state-verify.timer` when it is disabled (Frank gate
+  wq#3750); `LUMEN_VERIFY_ENABLE_TIMER=1` overrides.
+
+Two `test_lumen_verify.py` cases were updated for behaviour that landed in lumen-bin:
+`hardware` now has a probe (node_identity), and `_ssh_argv` passes the remote command as one
+quoted string.

@@ -93,7 +93,9 @@ def test_due_by_class_default(conn, registry):
 
 
 def test_due_skips_predicate_with_no_probe(conn, registry):
-    seed(conn, "hathor", "hardware", "mac-mini-m2", age_days=999, fact_class="hardware")
+    # power_plug has no probe (wq#2150). `hardware` used to be the example until wq#1688
+    # routed it to node_identity.
+    seed(conn, "hathor", "power_plug", "plug-3", age_days=999, fact_class="config")
     batches = lv.due_facts(conn, registry, NOW)
     assert not batches
 
@@ -366,7 +368,8 @@ def test_fleet_inventory_never_reads_the_store_through_fleet_inv(monkeypatch):
     monkeypatch.setattr(lv, "run", fake_run)
     lv.probe_fleet_inventory("thoth", [{"predicate": "lan_ip", "value": "192.168.8.218"}])
     assert seen and all(a[0] != "fleet-inv" for a in seen)
-    assert seen[0][0] == "ssh" and "addr" in seen[0]
+    # wq#1688: _ssh_argv passes the remote argv as ONE shlex-joined string after `--`.
+    assert seen[0][0] == "ssh" and "addr" in seen[0][-1]
 
 
 def test_fleet_inventory_lan_ip_confirms_only_an_address_the_node_has(monkeypatch):
