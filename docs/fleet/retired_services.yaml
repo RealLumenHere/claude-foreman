@@ -6,6 +6,8 @@
 #
 # Fields:
 #   units:        systemd unit names that no longer exist (LoadState verified)
+#                 ([] for a container-only retirement; list those under containers:)
+#   containers:   docker containers retired with the entry (optional)
 #   retired_on:   date the units stopped existing / were superseded
 #   reason:       why it was retired
 #   ticket:       wq ticket that retired it (or found the retirement)
@@ -293,6 +295,7 @@
         Apply ticket: wq#2041 (step 1 diff, step 2 units).
 
 - name: important-tier-phase1-subtraction
+  units: []   # container-only retirement: no systemd units; see containers:
   containers: [plausible_db, plausible_events_db, mongodb]
   load_state: not-running   # stopped by wq#3672 Phase-1 subtraction; confirmed
                              # stopped, not crashed
