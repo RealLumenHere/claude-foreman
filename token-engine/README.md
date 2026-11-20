@@ -10,6 +10,8 @@ The one process allowed to hold a credential. Design:
 | secret store | `/var/lib/token-engine/secrets/` 0700/0600 `tokeneng:tokeneng` — uid `lumen` gets EACCES |
 | unit | `systemd/token-engine.service` (NoNewPrivileges, ProtectSystem=strict, PrivateTmp, RestrictAddressFamilies, MemoryDenyWriteExecute, Restart=always) |
 | install | `install.sh` — root step, run detached: `lumen-run start --root -- bash .../install.sh .../token-engine` |
+| redeploy | `install.sh --daemon-only` (wq#5168) — after a merged code change: daemon + ledger + te_client + forges/providers + policy snapshot, restart, gate replay, `check_deploy_drift.py`. No users/secrets/ACLs/unit/timers. `lumen-run start --root -- bash .../install.sh --daemon-only .../token-engine` |
+| full-mode guards | sweep timer enabled only if already enabled or never installed (`TE_ENABLE_SWEEP_TIMER=1` overrides; gate wq#3750); `migrate()` keeps a store secret that differs from its source (`TE_MIGRATE_OVERWRITE=1` overrides) |
 | client | `te_client.py` — one JSON frame per connection, grant refs only, never a secret |
 | gate | `gate_replay.sh` — replays the T2 gate as uid lumen via `lumen-run start` |
 | ledger | `token_ledger.py` — minted-token ledger under `/var/lib/token-engine/minted/`, one 0600 file per ticket; revocation providers (`github-app`, `test-file`) |

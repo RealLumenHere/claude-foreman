@@ -8,13 +8,76 @@
 #
 # $1 = the token-engine source dir of the checkout being installed (defaults to
 # the canonical clone). Idempotent: safe to re-run.
+#
+# wq#5168: two modes.
+#   install.sh [SRC]                 FIRST INSTALL / full re-provision: users, store,
+#                                    secret migration, ACLs, unit, sweep, finalize.
+#   install.sh --daemon-only [SRC]   REDEPLOY after a code change: daemon + token_ledger
+#                                    + te_client + forges/providers + policy snapshot,
+#                                    restart, gate replay, drift check. Touches no
+#                                    user, secret, ACL, unit file, or timer. Use this
+#                                    for every "merged fix -> live daemon" step.
+# Full-mode guards (wq#5168):
+#   - remote-credential-sweep.timer is installed/enabled only when it is already
+#     enabled or does not exist yet. Disabled/masked (10-08 Phase-1 purge; re-enable
+#     is Frank gate wq#3750) is left alone unless TE_ENABLE_SWEEP_TIMER=1.
+#   - migrate() never overwrites a store secret that differs from its source (a
+#     store-side rotation would be rolled back to the stale source) unless
+#     TE_MIGRATE_OVERWRITE=1.
 set -euo pipefail
 
+MODE=full
+if [ "${1:-}" = --daemon-only ]; then MODE=daemon; shift; fi
+
 SRC="${1:-/home/lumen/foreman/token-engine}"
-LIB=/usr/local/lib/token-engine
-STATE=/var/lib/token-engine
-EVENTS=/home/lumen/foreman/events
-POLICY_SRC=/home/lumen/bin/fleet_exec_policy.py
+# Path overrides exist for tests/test_install_modes.py (sandbox + shims); never set
+# them on a real install.
+LIB="${TE_LIB:-/usr/local/lib/token-engine}"
+STATE="${TE_STATE:-/var/lib/token-engine}"
+EVENTS="${TE_EVENTS:-/home/lumen/foreman/events}"
+POLICY_SRC="${TE_POLICY_SRC:-/home/lumen/bin/fleet_exec_policy.py}"
+SOCK="${TE_SOCK:-/run/token-engine/broker.sock}"
+UNIT_DIR="${TE_UNIT_DIR:-/etc/systemd/system}"
+R="${TE_SRC_ROOT:-}"   # prefix for migrate() source paths (tests only)
+
+# Root-owned code copies: uid lumen must not be able to edit what uid tokeneng
+# executes, or the file-permission boundary is fiction. Shared by both modes.
+install_code() {
+    install -D -m 0755 -o root -g root "$SRC/token_engine_daemon.py" "$LIB/token_engine_daemon.py"
+    install -D -m 0644 -o root -g root "$SRC/token_ledger.py" "$LIB/token_ledger.py"
+    install -D -m 0644 -o root -g root "$POLICY_SRC" "$LIB/fleet_exec_policy.py"
+    install -D -m 0755 -o root -g root "$SRC/te_client.py" "$LIB/te_client.py"
+    install -D -m 0644 -o root -g root "$SRC/forges.json" "$LIB/forges.json"
+    install -D -m 0644 -o root -g root "$SRC/providers.json" "$LIB/providers.json"
+}
+
+# Gate replay, from root so it can impersonate the worker uid.
+gate_replay() {
+    sleep 1
+    systemctl is-active token-engine.service
+    if runuser -u lumen -- cat "$STATE/secrets/.canary" 2>/tmp/te-eacces.err; then
+        echo "FAIL: uid lumen read the canary — store is open" >&2
+        exit 1
+    fi
+    grep -q "Permission denied" /tmp/te-eacces.err
+    echo "OK: uid lumen -> EACCES on $STATE/secrets/.canary"
+    ls -l "$SOCK"
+}
+
+if [ "$MODE" = daemon ]; then
+    # Redeploy only makes sense on a box that has had the first install.
+    if [ ! -d "$LIB" ] || [ ! -f "$UNIT_DIR/token-engine.service" ] || [ ! -d "$STATE/secrets" ]; then
+        echo "REFUSED: --daemon-only needs a prior full install ($LIB, $UNIT_DIR/token-engine.service, $STATE/secrets); run install.sh without --daemon-only" >&2
+        exit 3
+    fi
+    install_code
+    systemctl restart token-engine.service
+    gate_replay
+    # repo == installed == running self_sha256 (wq#2567); as lumen, via token-client.
+    runuser -u lumen -- python3 "$SRC/check_deploy_drift.py" --src "$SRC" --ticket wq5168 --worker te-daemon-only
+    echo "token-engine daemon redeployed (--daemon-only): users, secrets, ACLs, unit, timers untouched"
+    exit 0
+fi
 
 # (a) OS user + client group. tokeneng is a system user with no shell; lumen
 # joins token-client for socket access only (design §5.2).
@@ -37,17 +100,11 @@ chown -R tokeneng:tokeneng "$STATE/secrets"
 find "$STATE/secrets" -maxdepth 1 -type f -exec chmod 0600 {} +
 chmod 0700 "$STATE/secrets"
 
-# Code runs from a root-owned copy: uid lumen must not be able to edit what uid
-# tokeneng executes, or the file-permission boundary is fiction. The policy
-# module is snapshotted from bin for the same reason. te_client.py is installed
-# too (wq#2273): lumen-pr calls the broker through this stable root-owned path
+# Code runs from a root-owned copy (install_code above). The policy module is
+# snapshotted from bin for the same reason. te_client.py is installed too
+# (wq#2273): lumen-pr calls the broker through this stable root-owned path
 # rather than a checkout it could edit.
-install -D -m 0755 -o root -g root "$SRC/token_engine_daemon.py" "$LIB/token_engine_daemon.py"
-install -D -m 0644 -o root -g root "$SRC/token_ledger.py" "$LIB/token_ledger.py"
-install -D -m 0644 -o root -g root "$POLICY_SRC" "$LIB/fleet_exec_policy.py"
-install -D -m 0755 -o root -g root "$SRC/te_client.py" "$LIB/te_client.py"
-install -D -m 0644 -o root -g root "$SRC/forges.json" "$LIB/forges.json"
-install -D -m 0644 -o root -g root "$SRC/providers.json" "$LIB/providers.json"
+install_code
 
 # wq#2271 (T1, design §3.1): the git credential helper. Root-owned in PATH so
 # `credential.helper = token-engine` resolves for every uid; the per-worktree
@@ -75,6 +132,13 @@ install -D -m 0755 -o root -g root "$SRC/hooks/pre-push" "$LIB/hooks/pre-push"
 migrate() { # migrate <src> <dest-basename>
     local src="$1" dest="$STATE/secrets/$2"
     [ -f "$src" ] || { echo "skip: $src absent"; return 0; }
+    # wq#5168: the store wins. A differing store copy means a rotation landed in the
+    # store after the source was copied; re-copying would roll it back (and, under
+    # TE_FINALIZE_MOVE, shred the only other copy). Skip and say so.
+    if [ -f "$dest" ] && ! cmp -s "$src" "$dest" && [ "${TE_MIGRATE_OVERWRITE:-0}" != 1 ]; then
+        echo "KEEP store: $dest differs from $src; not overwritten (TE_MIGRATE_OVERWRITE=1 to force)"
+        return 0
+    fi
     install -m 0600 -o tokeneng -g tokeneng "$src" "$dest"
     if [ "${TE_FINALIZE_MOVE:-0}" = 1 ]; then
         shred -u "$src" 2>/dev/null || rm -f "$src"
@@ -86,14 +150,14 @@ migrate() { # migrate <src> <dest-basename>
 # wq#2273 (T4) copied the forge tokens in; wq#2271 (T1) turns them into
 # migrate() rows so TE_FINALIZE_MOVE=1 — once every clone pushes through the
 # helper — shreds the /home/lumen/.secrets originals (ranks 1/2/4).
-migrate /home/lumen/.secrets/github-frank.token         github-frank.token
-migrate /home/lumen/.secrets/github-lumen-classic.token github-lumen-classic.token
-migrate /home/lumen/.secrets/gitea-lumen.token          gitea-lumen.token
-migrate /home/lumen/secrets/ebay.env        ebay.env               # rank 8
-migrate /home/lumen/.config/tapo.env        tapo.env
-migrate "${CLOUDFLARE_TOKEN_SRC:-/home/lumen/.secrets/cloudflare-api.token}" \
+migrate "$R/home/lumen/.secrets/github-frank.token"        github-frank.token
+migrate "$R/home/lumen/.secrets/github-lumen-classic.token" github-lumen-classic.token
+migrate "$R/home/lumen/.secrets/gitea-lumen.token"         gitea-lumen.token
+migrate "$R/home/lumen/secrets/ebay.env"       ebay.env               # rank 8
+migrate "$R/home/lumen/.config/tapo.env"       tapo.env
+migrate "${CLOUDFLARE_TOKEN_SRC:-$R/home/lumen/.secrets/cloudflare-api.token}" \
                                             cloudflare-api.token   # rank 7 (API token; tunnel cred stays root-only)
-migrate /home/lumen/.ssh/id_ed25519         fleet-ssh.key          # rank 3
+migrate "$R/home/lumen/.ssh/id_ed25519"        fleet-ssh.key          # rank 3
 # Rank 5: the LiteLLM mint key is operator-held (never in a lumen-readable
 # file — ops/wq1747 credential hygiene), so it arrives via env at install
 # time: LITELLM_ADMIN_KEY=... lumen-run start --root -- bash install.sh
@@ -127,21 +191,12 @@ setfacl -d -m u:tokeneng:rwX "$EVENTS"
 find "$EVENTS" -maxdepth 1 -name '*.jsonl' -exec setfacl -m u:tokeneng:rw {} +
 
 # (f) Hardened unit.
-install -D -m 0644 "$SRC/systemd/token-engine.service" /etc/systemd/system/token-engine.service
+install -D -m 0644 "$SRC/systemd/token-engine.service" "$UNIT_DIR/token-engine.service"
 systemctl daemon-reload
 systemctl enable token-engine.service
 systemctl restart token-engine.service
 
-# Gate replay, from root so it can impersonate the worker uid.
-sleep 1
-systemctl is-active token-engine.service
-if runuser -u lumen -- cat "$STATE/secrets/.canary" 2>/tmp/te-eacces.err; then
-    echo "FAIL: uid lumen read the canary — store is open" >&2
-    exit 1
-fi
-grep -q "Permission denied" /tmp/te-eacces.err
-echo "OK: uid lumen -> EACCES on $STATE/secrets/.canary"
-ls -l /run/token-engine/broker.sock
+gate_replay
 
 # wq#2271 (T1, design §3.2): token-free remotes. One immediate --fix pass
 # strips any userinfo/token from every clone's remote URLs (path-only output),
@@ -151,7 +206,18 @@ SWEEP_DIR="$(dirname "$SRC")/ops/wq2243-remote-credential-sweep"
 if [ -d "$SWEEP_DIR" ]; then
     runuser -u lumen -- python3 "$SWEEP_DIR/remote_credential_sweep.py" \
         scan --fix || true   # exit 1 = unstrippable finding; paged, not fatal
-    bash "$SWEEP_DIR/install.sh"
+    # wq#5168: install/enable the hourly timer only when it is already on or has
+    # never been installed. A deliberately disabled/masked timer stays off.
+    sweep_state="$(systemctl is-enabled remote-credential-sweep.timer 2>/dev/null || true)"
+    case "$sweep_state" in
+        enabled|enabled-runtime|""|not-found) bash "$SWEEP_DIR/install.sh" ;;
+        *)
+            if [ "${TE_ENABLE_SWEEP_TIMER:-0}" = 1 ]; then
+                bash "$SWEEP_DIR/install.sh"
+            else
+                echo "skip: remote-credential-sweep.timer is $sweep_state; not re-enabled (Frank gate wq#3750; TE_ENABLE_SWEEP_TIMER=1 to enable)" >&2
+            fi ;;
+    esac
 else
     echo "skip: $SWEEP_DIR absent — sweep --fix/timer not run" >&2
 fi
