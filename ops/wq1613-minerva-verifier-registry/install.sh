@@ -51,8 +51,19 @@ if [ "${1:-}" = --verify ]; then
   vfile "$HERE/registry.yaml" /home/lumen/minerva/verify/registry.yaml
   vunit_file "$HERE/lumen-state-verify.service" /etc/systemd/system/lumen-state-verify.service
   vunit_file "$HERE/lumen-state-verify.timer" /etc/systemd/system/lumen-state-verify.timer
-  venabled lumen-state-verify.timer
-  vactive lumen-state-verify.timer
+  # wq#5173: install leaves the timer disabled while it is disabled (Frank gate wq#3750, 10-08
+  # Phase-1 subtraction). --verify must agree with install, or this bundle fails forever on a
+  # state its own installer chose. Enabled (or LUMEN_VERIFY_ENABLE_TIMER=1) -> must be enabled
+  # AND active. Disabled -> GATED, but it must also be inactive (disabled-but-running is a MISS).
+  if systemctl is-enabled --quiet lumen-state-verify.timer 2>/dev/null || [ "${LUMEN_VERIFY_ENABLE_TIMER:-0}" = 1 ]; then
+    venabled lumen-state-verify.timer
+    vactive lumen-state-verify.timer
+  else
+    case "$(systemctl is-active lumen-state-verify.timer 2>/dev/null || true)" in
+      active|activating) _vmiss "lumen-state-verify.timer disabled but active (gate wq#3750 bypassed)" ;;
+      *) echo "GATED lumen-state-verify.timer disabled (Frank gate wq#3750); LUMEN_VERIFY_ENABLE_TIMER=1 install.sh to enable" ;;
+    esac
+  fi
   vdone
 fi
 

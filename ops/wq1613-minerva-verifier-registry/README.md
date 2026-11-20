@@ -106,3 +106,12 @@ would have rolled both live files back. Now:
 Two `test_lumen_verify.py` cases were updated for behaviour that landed in lumen-bin:
 `hardware` now has a probe (node_identity), and `_ssh_argv` passes the remote command as one
 quoted string.
+
+## --verify agrees with the timer gate (wq#5173, 2026-11-19)
+
+`install.sh` was run (53 tests, `repair_clobbered_facts.py` restored 3 `ram` facts, units
+reinstalled byte-identical); the timer stayed disabled. `--verify` still failed with
+`not enabled`/`not active` on the state the installer deliberately keeps. It now prints
+`GATED lumen-state-verify.timer ...` for disabled+inactive, MISSes disabled+active (gate
+bypassed), and with `LUMEN_VERIFY_ENABLE_TIMER=1` requires enabled+active as before.
+Test: `ops/tests/test_wq5173_verify_gated_timer.py`. Enabling the timer stays Frank's call.
