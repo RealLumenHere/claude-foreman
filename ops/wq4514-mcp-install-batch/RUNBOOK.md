@@ -110,9 +110,11 @@ Rollback: `claude mcp remove -s user fleet-state`; no role/secret to revoke.
 cd <worktree or foreman checkout>/ops/wq4514-mcp-install-batch
 bash ./install.sh [gitea|postgres|docker|grafana|playwright|fleet_state|stealth_browser|council ...]   # default all; ends with --verify
 bash ./install.sh --verify
-/home/lumen/.local/share/mcp/_guard/venv/bin/python -m pytest -q test_lumen_mcp_guard.py
-for t in gitea postgres docker grafana playwright fleet_state stealth_browser council; do /home/lumen/.local/share/mcp/_guard/venv/bin/python -I smoke_$t.py; done
+env -u PYTHONPATH /home/lumen/.local/share/mcp/_guard/venv/bin/python -m pytest -q test_lumen_mcp_guard.py test_install_launchers.py
+for t in gitea postgres docker grafana playwright fleet_state stealth_browser council; do env -u PYTHONPATH /home/lumen/.local/share/mcp/_guard/venv/bin/python -I smoke_$t.py; done
 ```
+`env -u PYTHONPATH`: Commander shells export `PYTHONPATH=/home/lumen/opt/mcp-proxy/lib`, which shadows the guard
+venv's pydantic_core and gives ~37 false failures (wq#5097 finding 3).
 `smoke_gitea.py` creates and closes one test issue per run unless `--skip-issue`. `smoke_council.py` makes one
 real `ask_deepseek` call (a few tokens via LiteLLM) unless `--no-spend`. `smoke_stealth_browser.py` opens
 example.com in a headless Chrome and closes it. Both take a launcher argv (default: the installed launch.sh);

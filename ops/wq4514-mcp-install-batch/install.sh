@@ -276,6 +276,7 @@ exec $GPY -I $GUARD --name stealth-browser \\
   --arg-allow 'spawn_browser:sandbox?=True|true' \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
+  --pins $PINS_FILE \\
   -- $STEALTH_DIR/venv/bin/python -I $STEALTH_DIR/lumen_stealth_mcp.py --minimal
 EOF
 }
@@ -293,6 +294,7 @@ exec $GPY -I $GUARD --name council \\
   --arg-allow 'ask_deepseek:model?=flash|pro' \\
   --mask-output $MASKER \\
   --max-result-bytes $MAX_RESULT_BYTES --untrusted-output \\
+  --pins $PINS_FILE \\
   -- $NODE $COUNCIL_SRC
 EOF
 }
@@ -423,6 +425,7 @@ verify_stealth_browser() {
   [ -x "$STEALTH_DIR/venv/bin/python" ] && [ -r "$STEALTH_DIR/lumen_stealth_mcp.py" ] \
     || _vmiss "wq#4206 stealth-browser install missing: $STEALTH_DIR (ops/wq4206-stealth-browser-mcp/install.sh)"
   vgen "$d/launch.sh" emit_launcher_stealth_browser
+  v_launcher_pins "$d/launch.sh"
   v_registered stealth-browser "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$STEALTH_ALLOW")" list_instances '{}'
 }
@@ -432,6 +435,7 @@ verify_council() {
   [ -x "$MASKER" ] || _vmiss "masker missing or not executable: $MASKER"
   [ -r "$COUNCIL_SRC" ] && [ -d /home/lumen/council/node_modules ] || _vmiss "council checkout missing: $COUNCIL_SRC"
   vgen "$d/launch.sh" emit_launcher_council
+  v_launcher_pins "$d/launch.sh"
   v_registered council "$d/launch.sh"
   v_launcher_lists "$d/launch.sh" "$(n_items "$COUNCIL_ALLOW")" council_status '{}'
 }

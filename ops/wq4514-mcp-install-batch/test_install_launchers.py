@@ -16,7 +16,8 @@ INSTALL_SH = Path(os.environ.get("INSTALL_SH", HERE / "install.sh"))
 MASKER = "/home/lumen/bin/mask-secrets"
 PINS_FILE = "/home/lumen/docs/security/mcp-tool-pins-2026-11.json"
 LAUNCHERS = ["gitea", "postgres", "fleet_state", "docker", "grafana", "playwright", "stealth_browser", "council"]
-PINNED_LAUNCHERS = ["gitea", "postgres", "fleet_state", "docker", "grafana", "playwright"]
+PINNED_LAUNCHERS = ["gitea", "postgres", "fleet_state", "docker", "grafana", "playwright",
+                    "stealth_browser", "council"]  # wq#5137: the two wq#4888 added after wq#4958
 
 
 def emit(name):
@@ -59,7 +60,7 @@ class LauncherMasking(unittest.TestCase):
                 self.assertEqual("--untrusted-output" in argv, name in untrusted, name)
 
     def test_pinned_launchers_pass_pins_file(self):
-        """wq#4958: the six guarded servers listed in the RUNBOOK pass --pins to the guard."""
+        """wq#4958/wq#5137: every guarded server listed in the RUNBOOK passes --pins to the guard."""
         for name in PINNED_LAUNCHERS:
             with self.subTest(launcher=name):
                 argv = guard_argv(emit(name))
