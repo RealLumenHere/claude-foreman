@@ -47,7 +47,7 @@ cat <<EOF
 # --no-lazy: every allowlisted tool is registered on connect; the lazy-load meta tools are hidden.
 set -euo pipefail
 export PYTHONWARNINGS=ignore
-exec $GPY -I $GUARD --name $NAME \\
+exec $GPY -I $GUARD --name $NAME --call-timeout 900 \\
   --allow $GHIDRA_ALLOW \\
 $(for a in "${PATH_ARGS[@]}"; do printf '  --path-arg %s=%s \\\n' "$a" "$RE_ROOT"; done)
   --mask-output $MASKER \\

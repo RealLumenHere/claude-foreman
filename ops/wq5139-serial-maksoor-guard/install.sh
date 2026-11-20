@@ -40,7 +40,7 @@ cat <<EOF
 set -euo pipefail
 export PYTHONWARNINGS=ignore
 unset PYTHONPATH
-exec $GPY -I $GUARD --name $NAME \\
+exec $GPY -I $GUARD --name $NAME --call-timeout 120 \\
   --allow $ALLOW \\
   --mask-output $MASKER \\
   --max-result-bytes 524288 --untrusted-output \\

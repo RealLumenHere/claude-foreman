@@ -41,6 +41,13 @@ Code and the real server:
     on tools/call, with a DRIFT audit row (wq#4941). The backend is re-listed on every request,
     so this is what stops a mid-session description rug-pull or schema change. Pins are read
     from surface --pins-surface (default NAME@guarded: the definition as the agent sees it);
+  * --call-timeout N gives every backend round trip a deadline of N seconds (default 30, 0 = off;
+    wq#5167: 30/720 fuzzed gitea-mcp calls against a dead upstream hung >10 s with no bound).
+    tools/call (allowlist gate, schema lookup, backend call and result shaping together) and
+    tools/list are each bounded. On expiry the in-flight request is cancelled, a TIMEOUT audit row
+    is written and the agent gets JSON-RPC error -32001 (the MCP SDKs' request-timeout code).
+    The backend process and its one session are kept: killing it would cost every later call a
+    fresh initialize, which gitea-mcp refuses (see serve());
   * every decision is appended to ~/.local/state/lumen-mcp-guard/<name>.jsonl. Tool names and
     argument KEYS only, never values: values can carry typed secrets. The log also gets a START
     row with the backend's own serverInfo (the agent only ever sees the guard's), a LIST row
@@ -59,7 +66,7 @@ Usage:
   lumen_mcp_guard.py --name N --allow a,b,c [--http-url-arg tool:arg] [--arg-allow tool:arg=v1|v2]
                      [--path-arg tool:arg=/root] [--mask-output CMD] [--egress-proxy]
                      [--max-result-bytes N] [--untrusted-output]
-                     [--pins FILE [--pins-surface KEY]]
+                     [--pins FILE [--pins-surface KEY]] [--call-timeout SECONDS]
                      [--env K=V] -- BACKEND_CMD ARGS...
   lumen_mcp_guard.py --list-backend --allow a,b,c -- BACKEND_CMD ARGS...
       prints the backend's serverInfo and tools split into exposed/hidden/missing; exit 1 if an allowlisted
@@ -81,6 +88,8 @@ warnings.filterwarnings("ignore")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # python -I drops the script dir
 
 STATE_DIR = os.path.expanduser("~/.local/state/lumen-mcp-guard")
+DEFAULT_CALL_TIMEOUT = 30.0
+REQUEST_TIMEOUT = -32001  # mcp/types.py notes it; the TypeScript SDK sends it for a timed-out request
 
 
 class PolicyError(ValueError):
@@ -461,6 +470,45 @@ def gate_unknown_tools(lowlevel, allow, audit):
     lowlevel.request_handlers[mt.CallToolRequest] = handler
 
 
+def deadline_requests(lowlevel, timeout, audit):
+    """wq#5167: bound tools/call and tools/list by `timeout` seconds; None or 0 leaves them unbounded.
+
+    Wraps the registered request handlers (outermost, after gate_unknown_tools) so the deadline
+    covers everything the guard does for one request, including the schema re-list in
+    on_call_tool that a wedged backend hangs just as surely as the call itself. anyio.fail_after is
+    the anyio form of asyncio.wait_for: mcp runs on anyio, and a cancel scope unwinds the proxy
+    client's pending request cleanly where a bare asyncio cancel can trip its task group. A late
+    reply from the backend is for a request id nobody awaits any more and is dropped by mcp.
+    """
+    if not timeout:
+        return
+    import anyio
+    import mcp.types as mt
+    from mcp.shared.exceptions import McpError
+
+    def wrap(req_type, label):
+        inner = lowlevel.request_handlers[req_type]
+
+        async def handler(req):
+            started = time.monotonic()
+            try:
+                with anyio.fail_after(timeout):
+                    return await inner(req)
+            except TimeoutError:
+                params = getattr(req, "params", None)
+                tool = getattr(params, "name", "-") if label == "tools/call" else "-"
+                args = (getattr(params, "arguments", None) or {}) if label == "tools/call" else {}
+                audit(tool, "TIMEOUT", f"{label}: backend gave no answer in {timeout:g}s "
+                      f"(waited {time.monotonic() - started:.1f}s); request cancelled", args)
+                raise McpError(mt.ErrorData(
+                    code=REQUEST_TIMEOUT,
+                    message=f"{label} timed out after {timeout:g}s (lumen-mcp-guard --call-timeout)")) from None
+        lowlevel.request_handlers[req_type] = handler
+
+    wrap(mt.CallToolRequest, "tools/call")
+    wrap(mt.ListToolsRequest, "tools/list")
+
+
 def harden_initialize():
     """Refuse initialize with an empty protocolVersion or clientInfo.name (mcp accepts both)."""
     import mcp.types as mt
@@ -563,12 +611,16 @@ def main(argv):
     ap.add_argument("--pins", default=None)
     ap.add_argument("--pins-surface", default=None)
     ap.add_argument("--list-backend", action="store_true")
+    ap.add_argument("--call-timeout", type=float, default=DEFAULT_CALL_TIMEOUT,
+                    help="seconds per backend tools/call or tools/list (default %(default)g, 0 = no deadline)")
     args = ap.parse_args(head)
     allow = {t.strip() for t in args.allow.split(",") if t.strip()}
     if not allow or not cmd:
         raise SystemExit("refusing to start: empty allowlist or backend command")
     if args.max_result_bytes is not None and args.max_result_bytes < 1024:
         raise SystemExit("--max-result-bytes wants at least 1024 (room for the truncation note)")
+    if args.call_timeout < 0 or args.call_timeout != args.call_timeout:  # negative or NaN
+        raise SystemExit("--call-timeout wants seconds >= 0 (0 turns the deadline off)")
     if args.pins_surface and not args.pins:
         raise SystemExit("--pins-surface needs --pins")
     pins = load_pins(args.pins, args.pins_surface or f"{args.name}@guarded") if args.pins else None
@@ -608,12 +660,14 @@ def main(argv):
         async with backend:
             audit("-", "START", f"backend serverInfo {server_info(backend)}; "
                   f"pins={'%d tools' % len(pins) if pins is not None else 'off'}; "
-                  f"max_result_bytes={args.max_result_bytes or 'off'}; untrusted_output={args.untrusted_output}", {})
+                  f"max_result_bytes={args.max_result_bytes or 'off'}; untrusted_output={args.untrusted_output}; "
+                  f"call_timeout={'%gs' % args.call_timeout if args.call_timeout else 'off'}", {})
             server = FastMCP.as_proxy(backend, name=args.name)
             server.add_middleware(make_policy(allow, url_args, arg_allow, audit, server.get_tool, mask_cmd, pins,
                                               path_args, args.max_result_bytes,
                                               args.name if args.untrusted_output else None))
             gate_unknown_tools(server._mcp_server, allow, audit)
+            deadline_requests(server._mcp_server, args.call_timeout, audit)  # outermost: bounds the gate too
             await server.run_async(transport="stdio", show_banner=False)
 
     harden_initialize()

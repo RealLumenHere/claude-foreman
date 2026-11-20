@@ -15,7 +15,7 @@ HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 GDIR=/home/lumen/.local/share/mcp/_guard
 ALLOW="$(tr -s '[:space:]' ',' < "$HERE/rea-allow.txt" | sed 's/^,//; s/,$//')"
 [ -n "$ALLOW" ] || { echo "rea-mcp-guarded: empty allowlist at $HERE/rea-allow.txt, refusing" >&2; exit 1; }
-exec "$GDIR/venv/bin/python" -I "$GDIR/lumen_mcp_guard.py" --name rea \
+exec "$GDIR/venv/bin/python" -I "$GDIR/lumen_mcp_guard.py" --name rea --call-timeout 900 \
   --allow "$ALLOW" \
   --mask-output /home/lumen/bin/mask-secrets \
   --max-result-bytes 524288 --untrusted-output \

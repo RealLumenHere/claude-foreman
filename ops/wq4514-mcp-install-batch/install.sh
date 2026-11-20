@@ -249,7 +249,7 @@ cat <<EOF
 # arguments, and every connection Chrome opens forced through the public-only egress proxy.
 set -euo pipefail
 export PYTHONWARNINGS=ignore
-exec $GPY -I $GUARD --name playwright --egress-proxy \\
+exec $GPY -I $GUARD --name playwright --egress-proxy --call-timeout 180 \\
   --allow $PW_ALLOW \\
   --http-url-arg browser_navigate:url --http-url-arg browser_tabs:url \\
   --mask-output $MASKER \\
@@ -270,7 +270,7 @@ cat <<EOF
 # the per-call URL/path policy and the public-only egress proxy; the guard hides execute_script/file_upload.
 set -euo pipefail
 export PYTHONWARNINGS=ignore
-exec $GPY -I $GUARD --name stealth-browser \\
+exec $GPY -I $GUARD --name stealth-browser --call-timeout 180 \\
   --allow $STEALTH_ALLOW \\
   --http-url-arg navigate:url \\
   --arg-allow 'spawn_browser:sandbox?=True|true' \\
@@ -289,7 +289,7 @@ cat <<EOF
 # ask_deepseek's model override closed to flash|pro (a free value reaches anthropic/* on LiteLLM).
 set -euo pipefail
 export PYTHONWARNINGS=ignore
-exec $GPY -I $GUARD --name council \\
+exec $GPY -I $GUARD --name council --call-timeout 660 \\
   --allow $COUNCIL_ALLOW \\
   --arg-allow 'ask_deepseek:model?=flash|pro' \\
   --mask-output $MASKER \\
