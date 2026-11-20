@@ -2917,8 +2917,14 @@ def local_profile_env():
     small/fast-model call is routed to a cheap non-Mac model the scoped gateway key
     allows. CLAUDE.md files, auto-memory and the git-status/instructions blocks are the
     CLI's per-machine context: the slim prompt is self-contained, and the fleet
-    CLAUDE.md's interactive busy-key protocol is wrong for a headless worker."""
+    CLAUDE.md's interactive busy-key protocol is wrong for a headless worker.
+    wq#5170: from 2.1.328 the CLI keeps deferred tool loading on behind a custom base URL
+    by sending a `DeferredToolPlaceholder` tool (`defer_loading: true`, "never call this
+    tool") even with --tools pinned; a local model behind LiteLLM gets a seventh,
+    non-standard tool. ENABLE_TOOL_SEARCH=false turns tool search off, so the request
+    carries exactly LOCAL_CLI_TOOLS again (measured with cli_calibration.py)."""
     return {"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
+            "ENABLE_TOOL_SEARCH": "false",
             "ANTHROPIC_SMALL_FAST_MODEL": LOCAL_BACKGROUND_MODEL,
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": LOCAL_BACKGROUND_MODEL,
             "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",

@@ -5,6 +5,7 @@ nuance for a kill the harness caused.
 import json
 import os
 import shutil
+import warnings
 import sys
 
 import pytest
@@ -123,11 +124,18 @@ needs_cli = pytest.mark.skipif(shutil.which("claude") is None, reason="claude CL
 
 @needs_cli
 def test_recorded_cli_version_matches_the_installed_cli():
+    """wq#5170: the CLI auto-updates (2.1.296 -> 2.1.328 -> 2.1.329 inside one evening), and
+    this suite gates every `lumen-pr land` (wq#5133), so an exact-version assert turned main
+    red on every release whether or not anything the pin protects had moved. What the pin
+    protects is the overhead constant and the tool list, and the two tests below measure
+    those on the installed CLI. A version change alone is a warning: re-pin when convenient."""
     installed = cli_calibration.installed_cli_version()
-    assert installed == charging.CALIBRATED_CLI_VERSION, (
-        f"installed claude CLI is {installed}, the overhead constant was measured on "
-        f"{charging.CALIBRATED_CLI_VERSION}: re-run `python3 harness/cli_calibration.py`, "
-        f"update charging.LOCAL_CLI_OVERHEAD_TOKENS and CALIBRATED_CLI_VERSION")
+    if installed != charging.CALIBRATED_CLI_VERSION:
+        warnings.warn(
+            f"installed claude CLI is {installed}, the overhead constant was measured on "
+            f"{charging.CALIBRATED_CLI_VERSION}: re-run `python3 harness/cli_calibration.py`, "
+            f"update charging.LOCAL_CLI_OVERHEAD_TOKENS and CALIBRATED_CLI_VERSION")
+    assert installed, "claude --version gave nothing"
 
 
 def _long_prompt():
