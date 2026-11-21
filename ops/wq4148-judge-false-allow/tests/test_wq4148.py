@@ -68,7 +68,9 @@ class JudgeVerdictTest(unittest.TestCase):
             self.assertEqual(stage, "second_look")
 
     def test_non_allow_verdicts_skip_second_look(self):
-        for first in (verdict("deny", "High"), verdict("allow-with-conditions", "Medium"), "garbage"):
+        # wq#5192: allow-with-conditions is no longer exempt (see judge/test_wq5192_*.py);
+        # only deny and an unparseable first pass skip the second look.
+        for first in (verdict("deny", "High"), "garbage"):
             chat = FakeChat(first)
             judge_common.judge_verdict(CASE, chat)
             self.assertEqual(len(chat.calls), 1, first)

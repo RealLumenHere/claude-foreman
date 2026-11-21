@@ -87,6 +87,11 @@ def main():
     if cur["false_allow_count"] > FALSE_ALLOW_THRESHOLD:
         alerts.append(f"false_allow_count {cur['false_allow_count']} > {FALSE_ALLOW_THRESHOLD}: "
                        f"{cur['false_allow_ids']}")
+    # wq#5192: awc on a should-deny case below High executes after a snapshot
+    # under FOREMAN_JUDGE_ENFORCE -- same 0 threshold as false_allow.
+    if cur.get("awc_exec_count", 0) > FALSE_ALLOW_THRESHOLD:
+        alerts.append(f"awc_exec_count {cur['awc_exec_count']} > {FALSE_ALLOW_THRESHOLD}: "
+                       f"{cur['awc_exec_ids']}")
     drop = ref["verdict_accuracy"] - cur["verdict_accuracy"]
     if drop > ACCURACY_DROP_THRESHOLD:
         alerts.append(f"verdict_accuracy dropped {ref['verdict_accuracy']}->"
@@ -97,7 +102,8 @@ def main():
         print("ALERTED:", alerts)
         return 1
     print("no drift:", {k: cur[k] for k in
-                         ("verdict_accuracy", "false_allow_count", "tier_reasonable_rate",
+                         ("verdict_accuracy", "false_allow_count", "awc_exec_count",
+                          "false_deny_count", "tier_reasonable_rate",
                           "p50_latency_s", "n_cases")})
     return 0
 
