@@ -3,8 +3,13 @@ import asyncio
 import builtins
 import os
 import re
+import select
+import shlex
+import shutil
 import sqlite3
+import subprocess
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -58,6 +63,9 @@ def store(tmp_path, monkeypatch):
     c.close()
     monkeypatch.setattr(mailstore, "MAIL_DB", str(db))
     monkeypatch.setattr(mailstore, "DRAFTS_DB", str(tmp_path / "drafts.db"))
+    monkeypatch.setattr(mailstore, "VERIFIER", str(tmp_path / "approve" / "verifier.json"))
+    monkeypatch.setattr(mailstore, "FAIL_DELAY", 0)
+    monkeypatch.setattr(mailstore, "SCRYPT_N", 2 ** 10)  # fast in tests; verifier records its own n
     return tmp_path
 
 
@@ -108,13 +116,161 @@ def test_approved_task_leaves_pending_and_blocks_new_drafts(store):
         mailstore.create_draft("k1", "second answer")
 
 
+PASS = "correct horse battery staple"
+
+
+@pytest.fixture
+def fake_mailbot(tmp_path, monkeypatch):
+    """A mail_tasks stand-in that records answer() calls to a file instead of writing D1."""
+    d = tmp_path / "fake_mailbot"
+    d.mkdir()
+    sent = tmp_path / "sent.log"
+    (d / "mail_tasks.py").write_text(
+        "def answer(task_id, text):\n"
+        f"    open({str(sent)!r}, 'a').write(task_id + '|' + text + '\\n')\n")
+    monkeypatch.setattr(mailstore, "MAILBOT", str(d))
+    monkeypatch.delitem(sys.modules, "mail_tasks", raising=False)
+    return sent
+
+
+def _draft_status(did):
+    return sqlite3.connect(mailstore.DRAFTS_DB).execute("SELECT status FROM drafts WHERE id=?", (did,)).fetchone()[0]
+
+
 def test_approve_refuses_without_tty_and_never_touches_d1(store, monkeypatch):
     d = mailstore.create_draft("k1", "answer")
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setitem(sys.modules, "mail_tasks", None)  # importing it would raise
-    with pytest.raises(SystemExit, match="TTY"):
+    with pytest.raises(SystemExit, match="TTY|terminal"):
         mailstore.approve(d["draft_id"])
     assert mailstore.list_drafts()[0]["draft_id"] == d["draft_id"]
+
+
+def test_approve_fails_closed_with_no_verifier(store, fake_mailbot, monkeypatch):
+    d = mailstore.create_draft("k1", "answer")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    asked = []
+    with pytest.raises(SystemExit, match="no approval passphrase is set"):
+        mailstore.approve(d["draft_id"], _getpass=lambda p: asked.append(p) or PASS)
+    assert asked == [] and not fake_mailbot.exists() and _draft_status(d["draft_id"]) == "draft"
+
+
+def test_approve_needs_the_passphrase_not_the_draft_id(store, fake_mailbot, monkeypatch):
+    mailstore._write_verifier(PASS)
+    assert os.stat(mailstore.VERIFIER).st_mode & 0o777 == 0o600
+    assert PASS not in Path(mailstore.VERIFIER).read_text()
+    d = mailstore.create_draft("k1", "Roof quote: 4k")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    for guess in (d["draft_id"], "", PASS.upper()):  # the old typed-back confirmation, empty, near miss
+        with pytest.raises(SystemExit, match="wrong passphrase"):
+            mailstore.approve(d["draft_id"], _getpass=lambda p, g=guess: g)
+    assert not fake_mailbot.exists() and _draft_status(d["draft_id"]) == "draft"
+    mailstore.approve(d["draft_id"], _getpass=lambda p: PASS)
+    assert fake_mailbot.read_text() == "k1|Roof quote: 4k\n" and _draft_status(d["draft_id"]) == "approved"
+
+
+def test_body_swapped_after_display_is_not_what_is_sent(store, fake_mailbot, monkeypatch):
+    mailstore._write_verifier(PASS)
+    d = mailstore.create_draft("k1", "what Frank reviewed")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+
+    def swap_then_type(prompt):
+        c = sqlite3.connect(mailstore.DRAFTS_DB)
+        c.execute("UPDATE drafts SET body='attacker text' WHERE id=?", (d["draft_id"],))
+        c.commit()
+        return PASS
+    mailstore.approve(d["draft_id"], _getpass=swap_then_type)
+    assert fake_mailbot.read_text() == "k1|what Frank reviewed\n"
+
+
+def test_set_passphrase_never_silently_overwrites(store, monkeypatch):
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    answers = iter(["short", "short"])
+    with pytest.raises(SystemExit, match="at least"):
+        mailstore.set_passphrase(_getpass=lambda p: next(answers))
+    answers = iter([PASS, PASS])
+    mailstore.set_passphrase(_getpass=lambda p: next(answers))
+    first = Path(mailstore.VERIFIER).read_text()
+    answers = iter(["not the current one"])
+    with pytest.raises(SystemExit, match="wrong passphrase"):
+        mailstore.set_passphrase(_getpass=lambda p: next(answers))
+    assert Path(mailstore.VERIFIER).read_text() == first
+    answers = iter([PASS, "a brand new passphrase", "a brand new passphrase"])
+    mailstore.set_passphrase(_getpass=lambda p: next(answers))
+    assert mailstore._passphrase_ok(mailstore._load_verifier(), "a brand new passphrase")
+
+
+def test_verifier_path_ignores_environment(monkeypatch):
+    import importlib
+    monkeypatch.setenv("MAILBOT_APPROVE_VERIFIER", "/tmp/attacker.json")
+    monkeypatch.setenv("MAILBOT_VERIFIER", "/tmp/attacker.json")
+    fresh = importlib.reload(mailstore)
+    try:
+        assert fresh.VERIFIER == "/home/lumen/.config/mailbot-approve/verifier.json"
+    finally:
+        monkeypatch.delenv("MAILBOT_APPROVE_VERIFIER"); monkeypatch.delenv("MAILBOT_VERIFIER")
+        importlib.reload(mailstore)
+
+
+def test_drafts_db_made_0644_by_someone_else_is_tightened(store):
+    Path(mailstore.DRAFTS_DB).touch(mode=0o644)
+    os.chmod(mailstore.DRAFTS_DB, 0o644)
+    mailstore.list_drafts()
+    assert os.stat(mailstore.DRAFTS_DB).st_mode & 0o777 == 0o600
+
+
+SCRIPT = shutil.which("script")
+
+
+def _drive_script(store, fake_dir, draft_id, answer, timeout=60):
+    """Run approve the way the wq#5094 probe did, `script -qec "..." /dev/null`, and type `answer`
+    only after the prompt shows. Pre-fed input would be dropped by getpass's TCSAFLUSH and
+    pass for the wrong reason; an agent driving a pty can wait for the prompt too."""
+    prelude = (f"import sys; sys.path.insert(0, {str(HERE)!r}); import mailstore as m; "
+               f"m.MAIL_DB={mailstore.MAIL_DB!r}; m.DRAFTS_DB={mailstore.DRAFTS_DB!r}; "
+               f"m.VERIFIER={mailstore.VERIFIER!r}; m.MAILBOT={fake_dir!r}; m.FAIL_DELAY=0; "
+               f"m._cli(['approve', {draft_id!r}])")
+    inner = f"{shlex.quote(sys.executable)} -c {shlex.quote(prelude)}"
+    proc = subprocess.Popen([SCRIPT, "-qec", inner, "/dev/null"], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+    out, sent, deadline = b"", False, time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        r, _, _ = select.select([proc.stdout], [], [], 0.2)
+        if r:
+            chunk = os.read(proc.stdout.fileno(), 4096)
+            if not chunk:
+                break
+            out += chunk
+            if not sent and b"passphrase" in out:
+                time.sleep(0.3)  # let getpass finish its tcsetattr before typing
+                proc.stdin.write(answer.encode() + b"\n"); proc.stdin.flush()
+                sent = True
+    else:
+        proc.kill()
+        raise AssertionError(f"script(1) run timed out: {out!r}")
+    out += proc.stdout.read() or b""
+    proc.wait(10)
+    return proc.returncode, out.decode(errors="replace"), sent
+
+
+@pytest.mark.skipif(not SCRIPT, reason="util-linux script(1) not installed")
+def test_script1_pty_bypass_is_refused(store, fake_mailbot):
+    """wq#5175 acceptance: the wq#5094 bypass (script(1) pty + typing the draft id back) sends nothing."""
+    mailstore._write_verifier(PASS)
+    d = mailstore.create_draft("k1", "Roof quote: 4k")
+    fake_dir = mailstore.MAILBOT
+    for attack in (d["draft_id"], "y", "approve"):
+        rc, out, sent = _drive_script(store, fake_dir, d["draft_id"], attack)
+        assert sent, f"harness never reached the passphrase prompt: {out!r}"
+        assert rc != 0 and "wrong passphrase, nothing sent" in out, out
+        assert not fake_mailbot.exists() and _draft_status(d["draft_id"]) == "draft"
+    # positive control: the same harness with the real passphrase does send, so the refusals above
+    # came from the passphrase check and not from a harness that never reached the gate
+    rc, out, sent = _drive_script(store, fake_dir, d["draft_id"], PASS)
+    assert rc == 0 and "queued" in out, out
+    assert fake_mailbot.read_text() == "k1|Roof quote: 4k\n" and _draft_status(d["draft_id"]) == "approved"
 
 
 def test_no_token_file_is_opened(store, monkeypatch):

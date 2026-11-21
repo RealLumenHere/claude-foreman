@@ -49,15 +49,21 @@ Scope floor: `gmail.readonly` plus `gmail.compose`, token in a 0600 file, behind
 | Thin adapter, no new mail subsystem | stdio FastMCP over `mail.db`. No listener, no new D1 tables, no worker change. | `server.py`, `mailstore.py` |
 | Read/search | `mail_status`, `mail_search`, `mail_thread`, `mail_contact`, `mail_needs_frank`, `mail_pending_tasks` | tests 1-2 |
 | Draft creation | `mail_draft_create(task_id, body)` writes `drafts.db` (0600). Never written to `mail.db` or D1. | test 4 |
-| Approval for send/delete/forward/calendar | None of these tools exist. The guard `--allow` list is the whole surface (`mail_send` → "Unknown tool"). Sending = `mailstore.py approve <id>`, which refuses without a TTY and needs the draft id typed back. | tests 6, 8; smoke |
-| OAuth/credentials kept from agents | The MCP process opens no token file. The D1-Read token stays with sync; the D1-Edit token is touched only by the human-run `approve`. | test 7 |
+| Approval for send/delete/forward/calendar | None of these tools exist. The guard `--allow` list is the whole surface (`mail_send` → "Unknown tool"). Sending = `mailstore.py approve <id>`, which needs Frank's approval passphrase (scrypt verifier, fixed path). wq#5175 replaced the original TTY + typed-back-id gate, which `script(1)` bypassed. | tests 6, 8; smoke |
+| OAuth/credentials kept from agents | The MCP process opens no token file. The D1-Read token stays with sync; the D1-Edit token is read only by `approve`, after the passphrase check. | test 7 |
 | Mail bodies are third-party text | The launcher runs the server behind `lumen_mcp_guard --untrusted-output --mask-output mask-secrets --max-result-bytes`. | smoke output: `UNTRUSTED DATA ... <<<untrusted-…` |
 
 Drafts answer pending tasks only. Mailbot has no path for sending a free-form reply on an
 arbitrary thread, and inventing one would be the new mail subsystem the ticket rules out.
 
-The approve TTY gate stops a headless agent's Bash call. It does not stop an interactive
-operator, which is the same trust level as `mail_tasks.py answer` today.
+**Correction (wq#5175).** This section first said the approve TTY gate stops a headless agent's Bash
+call. That was wrong. The wq#5094 verify showed `script -qec "python3 mailstore.py approve <id>" /dev/null`
+passes `isatty()`, and the typed-back draft id can be fed through the same pty. A TTY is not proof
+that a human is there. The gate is now a secret only Frank holds: an approval passphrase checked against
+a scrypt verifier at a fixed path. The body sent is the copy Frank reviewed. A test drives the exact
+script(1) bypass and checks that it sends nothing (`test_script1_pty_bypass_is_refused`).
+Residual: lumen can read the D1-Edit token, edit the code, and sudo. Deliberate tampering is the same
+trust level as `mail_tasks.py answer`. The messenger Bash guard refuses those paths by name.
 
 ### Verification (2026-11-18)
 
