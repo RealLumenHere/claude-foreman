@@ -1,0 +1,29 @@
+{
+  "_comment": "wq#5200: cli_tools entries for a Limpet MCP meta-server (lib/mcp/manifest.json schema) running where /home/lumen/bin/re-orchestrate and ssh to maksoor exist (i.e. Lumen, not the Farida ISO). re_fingerprint/re_plan never run tools: read_only. re_run executes tools on maksoor, so it is energizing and sits behind the Sentinel gate (wq#5087); re-orchestrate's own permission gate still applies inside it (write/hw_read need --approve, hw_write needs a Frank wq ticket, network is blocked).",
+  "cli_tools": [
+    {
+      "name": "re_fingerprint",
+      "command": ["/home/lumen/bin/re-fingerprint", "{path}", "--compact"],
+      "description": "Fingerprint an RE target: format, arch, OS, vendor/SoC hints, embedded formats (nested). JSON.",
+      "args_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+      "timeout_sec": 300,
+      "action_class": "read_only"
+    },
+    {
+      "name": "re_plan",
+      "command": ["/home/lumen/bin/re-orchestrate", "plan", "{path}", "--no-hw"],
+      "description": "Structured investigation plan from the capability registry: ranked tool chains, stages with fallbacks, gate preview, resource limits. Runs nothing.",
+      "args_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+      "timeout_sec": 300,
+      "action_class": "read_only"
+    },
+    {
+      "name": "re_run",
+      "command": ["/home/lumen/bin/re-orchestrate", "run", "{path}", "--project", "{project}"],
+      "description": "Run the auto stages of the plan on maksoor (resource-limited, network-isolated, read-only target) and write evidence envelopes under /home/lumen/re/evidence/<project>/<analysis_id>/.",
+      "args_schema": {"type": "object", "properties": {"path": {"type": "string"}, "project": {"type": "string"}}, "required": ["path", "project"]},
+      "timeout_sec": 7200,
+      "action_class": "energizing"
+    }
+  ]
+}
