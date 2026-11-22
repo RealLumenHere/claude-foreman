@@ -94,11 +94,24 @@ correctly treat the whole block as drift and open the initial migration ticket
 The timer was installed later (unit files in `/etc/systemd/system` are dated
 2026-09-20), then the 2026-10-08 subtraction disabled it on purpose
 (`/home/lumen/scratch/subtraction/timers-disable-list.txt`, line 59). So
-`install.sh --verify` checks only the module and the two unit files. It does
-not check that the timer is enabled or active. Do not run `install.sh` as root
-to "fix" the timer: step 3 runs `systemctl enable --now` and undoes the
-subtraction. Re-enabling the timer is a decision. If someone makes it, they put
-`venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
+`install.sh --verify` does not require the timer to be enabled or active. The
+timer's live state picks the contract (wq#5322, the wq#5273 pattern):
+
+- disabled + inactive: the intended state. Prints an `OFF` line, no MISS.
+- disabled but active: MISS. Someone bypassed the subtraction by hand.
+- enabled: someone re-enabled it. Prints a `REENABLED` line and enforces
+  `vactive` + `vtimer_scheduled`.
+
+The module and both unit files are checked in every state.
+
+`install.sh` without `--verify` refuses with exit 2 before any step, because
+step 3 runs `systemctl enable --now` and undoes the subtraction. Re-enabling the
+timer is a decision; whoever makes it runs
+`PREFS_BLOCK_REENABLE=1 bash install.sh`. Even then, step 1 reinstalls the
+bundle's `prefs_block.py`, which the minerva repo has since moved past, so check
+`--verify`'s "superseded" line first.
+
+Test: `python3 ops/tests/test_wq5322_prefs_block_intended_off.py`.
 
 ## Verify
 
