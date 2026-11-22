@@ -13,19 +13,48 @@ set -euo pipefail
 if [ "${1:-}" = --verify ]; then
   SRC="$(cd "$(dirname "$0")" && pwd)"
   . "$SRC/../_verify.sh"
-  vfile      "$SRC/sampler.py" /usr/local/lib/wq394-netdata-canary/sampler.py
-  vfile      "$SRC/analyze.py" /usr/local/lib/wq394-netdata-canary/analyze.py
   vunit_file "$SRC/wq394-netdata-sampler.service" \
              /etc/systemd/system/wq394-netdata-sampler.service
   vunit_file "$SRC/wq394-netdata-sampler.timer" \
              /etc/systemd/system/wq394-netdata-sampler.timer
-  venabled   wq394-netdata-sampler.timer
-  vactive    wq394-netdata-sampler.timer
-  # wq#4910: no vtimer_scheduled for wq394-netdata-sampler.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/REPORT.md 1G). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
-  vactive    netdata.service
+  # wq#5275: the 2026-10-08 subtraction (scratch/subtraction/REPORT.md 1G) stopped and
+  # disabled netdata.service AND wq394-netdata-sampler.timer on purpose (~408MB RSS; Beszel +
+  # gatus are the monitoring of record). Asserting enabled/active on them made --verify fail
+  # forever and filed ops-root-apply tickets whose fix (root install) would undo that
+  # decision. Same gated shape as wq#5173 (wq1613): run state and the sampler payload are
+  # only checked while the operator has the unit enabled; disabled means OFF, but a
+  # disabled-yet-running unit is still a MISS (something started it behind the decision).
+  _wq394_state() { systemctl is-active "$1" 2>/dev/null || true; }
+  if systemctl is-enabled --quiet wq394-netdata-sampler.timer 2>/dev/null; then
+    vfile      "$SRC/sampler.py" /usr/local/lib/wq394-netdata-canary/sampler.py
+    vfile      "$SRC/analyze.py" /usr/local/lib/wq394-netdata-canary/analyze.py
+    venabled   wq394-netdata-sampler.timer
+    vactive    wq394-netdata-sampler.timer
+    vtimer_scheduled wq394-netdata-sampler.timer  # wq#4910: vactive also passes SubState=elapsed
+  else
+    case "$(_wq394_state wq394-netdata-sampler.timer)" in
+      active|activating) _vmiss "wq394-netdata-sampler.timer disabled but active (subtraction 1G bypassed)" ;;
+      *) echo "OFF wq394-netdata-sampler.timer disabled (2026-10-08 subtraction 1G); payload not checked" ;;
+    esac
+  fi
+  if systemctl is-enabled --quiet netdata.service 2>/dev/null; then
+    vactive  netdata.service
+  else
+    case "$(_wq394_state netdata.service)" in
+      active|activating) _vmiss "netdata.service disabled but active (subtraction 1G bypassed)" ;;
+      *) echo "OFF netdata.service disabled (2026-10-08 subtraction 1G)" ;;
+    esac
+  fi
   vdone
+fi
+
+# wq#5275: installing re-enables netdata + the sampler timer and restarts the soak clock,
+# reversing subtraction 1G. That is a decision, not a heal: refuse unless asked for.
+if [ "${WQ394_REENABLE:-0}" != 1 ]; then
+  echo "install.sh: netdata + wq394-netdata-sampler.timer are intended-off (2026-10-08" \
+       "subtraction, scratch/subtraction/REPORT.md 1G). Re-enabling is a decision;" \
+       "set WQ394_REENABLE=1 to install anyway." >&2
+  exit 2
 fi
 
 TAILSCALE_IP="${1:?usage: install.sh <tailscale-ip-of-this-host>}"
