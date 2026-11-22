@@ -138,6 +138,9 @@ class Base(unittest.TestCase):
             "budget": {"state_file": pt["budget"]},
             "log_file": pt["log"], "state_file": pt["state"], "lock_file": pt["lock"],
             "dispatch_run_dir": pt["runs"],
+            # wq#5211: never read the live API-credit ledger from a test; TestApiCreditRuntime
+            # turns this on against a scratch ledger.
+            "api_credit": {"enabled": False},
             "bins": {"wq": os.path.join(self.d, "wq"), "dispatch_batch": os.path.join(self.d, "dispatch-batch"),
                      "ntfy_send": os.path.join(self.d, "ntfy-send"), "router": os.path.join(self.d, "router.py"),
                      "systemctl": os.path.join(self.d, "systemctl"),
@@ -543,6 +546,83 @@ class TestBudgetFloors(Base):
         self.tickets = {"1": tk(model="deepseek-v4-flash")}
         self.run_ad()
         self.assertEqual(self.calls(), ["1"])
+
+
+HARNESS_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                            "..", "..", "harness"))
+
+
+class TestApiCreditRuntime(Base):
+    """wq#5211: a ticket the harness would run on the API credit skips the Max-pool floors."""
+
+    def setUp(self):
+        super().setUp()
+        acd = os.path.join(self.d, "api-credit")
+        os.mkdir(acd)
+        key = os.path.join(self.d, "key")
+        open(key, "w").write("fake-key\n")
+        self.acd = acd
+        json.dump({"enabled": True, "key_file": key, "grant_schedule": [{"from": "2020-01-13", "grant_usd": 200}]},
+                  open(os.path.join(acd, "config.json"), "w"))
+        self.env["FOREMAN_API_CREDIT_DIR"] = acd
+        self.env["FOREMAN_NTFY_BIN"] = os.path.join(self.d, "ntfy-send")
+        self.overrides = {"api_credit": {"enabled": True, "harness_dir": HARNESS_DIR}}
+
+    def exhaust(self):
+        subprocess.run([sys.executable, os.path.join(HARNESS_DIR, "api_credit.py"),
+                        "mark-exhausted", "test"], env=self.env, capture_output=True, check=True)
+
+    def dispatch_events(self):
+        return {e["ticket"]: e for e in self.events() if e["event"] == "dispatch"}
+
+    def test_floor_bypassed_for_sdk_ticket(self):
+        self.limits["session"]["percent"] = 75              # Max floor hit
+        self.tickets = {"1": tk(model="claude-sonnet-5-5")}
+        self.run_ad()
+        self.assertEqual(self.calls(), ["1"])
+        ev = self.dispatch_events()[1]
+        self.assertEqual(ev["runtime"], "sdk")
+        self.assertEqual(ev["sdk_model"], "anthropic/claude-opus-5-5")
+
+    def test_floor_applies_again_once_credits_exhausted(self):
+        self.limits["session"]["percent"] = 75
+        self.tickets = {"1": tk(model="claude-sonnet-5-5")}
+        self.exhaust()
+        self.run_ad()
+        self.assertEqual(self.calls(), [])
+        self.assertIn("runtime claude", self.skips()[1])
+
+    def test_fable_ticket_keeps_max_rules(self):
+        self.limits["session"]["percent"] = 75
+        self.tickets = {"1": tk(model="claude-fable-5-2"), "2": tk(model="claude-opus-5-5")}
+        self.run_ad()
+        self.assertEqual(self.calls(), ["2"])
+        self.assertIn("session", self.skips()[1])
+
+    def test_no_floor_hit_logs_runtime_anyway(self):
+        self.tickets = {"1": tk(model="claude-sonnet-5-5"), "2": tk(model="deepseek-v4-flash")}
+        self.run_ad()
+        evs = self.dispatch_events()
+        self.assertEqual(evs[1]["runtime"], "sdk")
+        self.assertEqual(evs[2]["runtime"], "claude")
+
+    def test_stale_budget_runs_sdk_tickets_only(self):
+        self.tickets = {"1": tk(model="claude-sonnet-5-5"), "2": tk(model="claude-fable-5-2")}
+        self.write(budget_stale=True, cache_age=2197312)
+        subprocess.run([sys.executable, SCRIPT, "--config", self.paths["cfg"], "--now", NIGHT_PT],
+                       capture_output=True, text=True, env=self.env)
+        self.assertEqual(self.calls(), ["1"])
+        self.assertEqual(self.halts(), [])
+        self.assertIn("budget stale", self.skips()[2])
+
+    def test_stale_budget_still_halts_without_credits(self):
+        self.tickets = {"1": tk(model="claude-sonnet-5-5")}
+        self.exhaust()
+        self.write(budget_stale=True, cache_age=2197312)
+        subprocess.run([sys.executable, SCRIPT, "--config", self.paths["cfg"], "--now", NIGHT_PT],
+                       capture_output=True, text=True, env=self.env)
+        self.assertEqual(self.calls(), [])
+        self.assertEqual(self.halts()[0]["kind"], "budget_stale")
 
 
 class TestFailuresLoggingDryRun(Base):

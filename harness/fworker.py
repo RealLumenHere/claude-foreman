@@ -79,6 +79,7 @@ import charging
 import burn_filter
 import masking
 import mask_replay  # wq#4736: the rotated ledger — a settled value is not a new alarm
+import api_credit  # wq#5211: monthly API-credit ledger + SDK runtime choice
 import cf_hold  # wq#2843: the CF-rotation hold shape, shared with foreman_dispatcher.py
 
 # wq#1332 (WORKER_EXEC_CAPABILITY_GAP.md §2.4): fleet_exec_policy.py lives in the
@@ -3924,7 +3925,12 @@ def reissue_ceiling_killed(ticket_id, attempt, ceiling, worktree,
 # SUCCESS branch files the verify-pass that reviews the local model's diff.
 # ---------------------------------------------------------------------------
 
-RUNTIMES = ("claude", "aider")
+RUNTIMES = ("claude", "aider", "sdk")
+# wq#5211: the `sdk` runtime runs fworker_sdk.py (anthropic SDK -> LiteLLM, scoped
+# foreman-apicredit key) in place of `claude -p`: same argv, same stream-json, so
+# run_child() supervises it unchanged. It spends the plan's monthly API credit, which
+# Claude Code traffic cannot (Anthropic refuses claude-code-tagged requests on it).
+SDK_BIN = os.environ.get("FOREMAN_SDK_BIN", os.path.join(HARNESS_DIR, "fworker_sdk.py"))
 AIDER_BIN = os.environ.get("FOREMAN_AIDER_BIN", "/home/lumen/.local/bin/aider")
 AIDER_MODEL = os.environ.get("FOREMAN_AIDER_MODEL", "openai/lumen/code")
 # instinct 4: the backend URL and key live in this 0600 file and reach the child's env
@@ -4100,6 +4106,119 @@ def run_child_aider(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     raw_events.append(frame)
     state.observe(frame)
     return state, exit_code, raw_events, killed_reason, cpu_s, pid
+
+
+def dispatch_gate(args):
+    """The pre-claim/per-attempt pool gate for this run's runtime (wq#5211). claude:
+    the governor's Max-pool check. aider: none (local lumen/code, wq#4289). sdk: the
+    API-credit ledger, never the Max pool it doesn't spend."""
+    rt = runtime_of(args)
+    if rt == "aider":
+        return True, None
+    if rt == "sdk":
+        if os.path.exists(STOP_FILE):
+            return False, "STOP file present"
+        ok, why = api_credit.available()
+        return ok, (None if ok else f"api credits unavailable: {why}")
+    return can_dispatch(args.model)
+
+
+def select_runtime(args):
+    """wq#5211: pick the SDK runtime for this run when the API credit can carry it.
+    An explicit --runtime/FOREMAN_RUNTIME claude|aider always wins; an explicit sdk is
+    honoured only while credits are available (else the CLI runs it, so a dry ledger
+    can never strand a ticket). A resume stays on the runtime that owns the session."""
+    explicit = getattr(args, "runtime", None) or os.environ.get("FOREMAN_RUNTIME")
+    if explicit in ("claude", "aider") or args.archetype == FIRE_ARCHETYPE:
+        return
+    try:
+        ticket = wq_show(args.ticket)
+        resume_sid = ticket.get("resume_session")
+        resume_sid = None if resume_sid in (None, "", "None") else resume_sid
+        if not resume_sid and park_mod.enabled():
+            try:
+                pr = park_mod.peek_resume(args.ticket, runs_root=RUNS_ROOT)
+                resume_sid = (pr or {}).get("session_id")
+            except Exception:
+                pass
+        if explicit == "sdk":
+            ok, why = api_credit.available()
+            if not ok and not str(resume_sid or "").startswith("sdk-"):
+                log(f"wq#{args.ticket}: --runtime sdk requested but {why} — running on the "
+                    f"claude CLI instead (wq#5211 fallback)")
+                args.runtime = "claude"
+                return
+        rt, model, why = api_credit.choose_runtime(
+            ticket, args.model, args.archetype,
+            explicit="sdk" if explicit == "sdk" else None, resume_session=resume_sid)
+    except Exception as e:  # noqa: BLE001 -- any doubt leaves the CLI default
+        log(f"wq#{args.ticket}: runtime selection failed open to claude ({e})")
+        if explicit == "sdk":
+            args.runtime = "claude"
+        return
+    if rt == "sdk":
+        log(f"wq#{args.ticket}: runtime sdk ({why}); model {args.model} -> {model}")
+        args.runtime, args.model = "sdk", model
+    else:
+        log(f"wq#{args.ticket}: runtime claude ({why})")
+
+
+def run_child_sdk(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
+                  frame_gap_s=None, post_result_grace_s=None, loop_tracker=None,
+                  first_frame_s=None, post_result_bg_grace_s=None):
+    """wq#5211: run_child() sibling for the sdk runtime, same signature and 6-tuple.
+    The claude argv is reused verbatim behind fworker_sdk.py; the child env loses every
+    Claude Code / gateway credential and gets the scoped API-credit key instead (the
+    child scrubs it from its own tool subprocesses' env)."""
+    sdk_env = dict(env)
+    for k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+              "ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"):
+        sdk_env.pop(k, None)
+    try:
+        cfg = api_credit.load_config()
+        with open(cfg["key_file"]) as f:
+            sdk_env["FWORKER_SDK_API_KEY"] = f.read().strip()
+        sdk_env["FWORKER_SDK_BASE_URL"] = cfg.get("base_url") or LITELLM_BASE_URL
+    except (OSError, ValueError, KeyError) as e:
+        state = RunState()
+        state.runtime = "sdk"
+        log(f"wq#{ticket_id} attempt {attempt}: sdk runtime key/config unreadable: {e}")
+        return state, 1, [{"type": "sdk_error", "error": str(e)}], None, 0.0, None
+    sdk_env["FOREMAN_ATTEMPT"] = str(attempt)
+    sdk_cmd = [sys.executable, SDK_BIN] + list(cmd[1:])
+    log(f"wq#{ticket_id} attempt {attempt}: sdk runtime (fworker_sdk.py), model "
+        f"{cmd[cmd.index('--model') + 1] if '--model' in cmd else '?'}")
+    state, exit_code, raw_events, killed_reason, cpu_s, pid = run_child(
+        sdk_cmd, cwd, sdk_env, max_turns, wall_clock_s, ticket_id, attempt,
+        frame_gap_s=frame_gap_s, post_result_grace_s=post_result_grace_s,
+        loop_tracker=loop_tracker, first_frame_s=first_frame_s,
+        post_result_bg_grace_s=post_result_bg_grace_s)
+    state.runtime = "sdk"
+    rt = state.result_text if isinstance(state.result_text, str) else ""
+    state.api_credit_exhausted = ("API_CREDIT_EXHAUSTED" in rt
+                                  or api_credit.is_credit_exhausted_error(rt))
+    return state, exit_code, raw_events, killed_reason, cpu_s, pid
+
+
+def handle_api_credit_exhausted(args, ticket_id, attempt, state, worktree):
+    """wq#5211: the API credit ran dry mid-run (credit_balance_too_low, LiteLLM key
+    budget, or the local cycle cap). Not the ticket's fault: uncharged like
+    MODEL_NOT_FOUND (attempt records never written here), claim released so the next
+    dispatch takes the CLI worker — api_credit has already flagged the cycle, so
+    select_runtime() won't pick sdk again until the next cycle. Returns None when the
+    ticket is already done (the worker finished first): judge that normally."""
+    if wq_show(ticket_id).get("status") == "done":
+        return None
+    set_sigterm_idle(ticket_id)
+    line = (f"API_CREDIT_EXHAUSTED: sdk runtime stopped on attempt {attempt} "
+            f"({(state.result_text or '')[:160] if isinstance(state.result_text, str) else '?'}); "
+            f"attempt not charged; next dispatch runs on the claude CLI (worktree {worktree} kept)")
+    log(line)
+    p = wq("note", str(ticket_id), line)
+    if p.returncode != 0:
+        log(f"WARN: wq note append failed: {(p.stdout or p.stderr).strip()}")
+    wq_release(ticket_id)
+    return EXIT_RUNG_FAULT
 
 
 # ---------------------------------------------------------------------------
@@ -4482,8 +4601,9 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     claim_holder_at_start = ticket_holder(ticket)
     # wq#4289: both gates below police args.model's pool; the aider runtime spends none of it.
     aider_runtime = runtime_of(args) == "aider"
+    sdk_runtime = runtime_of(args) == "sdk"  # wq#5211
 
-    allow, reason = (True, None) if aider_runtime else can_dispatch(args.model)
+    allow, reason = dispatch_gate(args)
     if not allow:
         log(f"governor DEFERRED dispatch: {reason} — releasing claim")
         wq_release(ticket_id)
@@ -4717,6 +4837,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # claude -p directly until an operator opts one in — harness/GATEWAY_CANARY.md).
     if aider_runtime:
         run_fn = run_child_aider
+    elif sdk_runtime:
+        run_fn = run_child_sdk  # wq#5211
     elif gateway_lane_enabled(ticket.get("lane")):
         run_fn = run_child_gateway
     else:
@@ -4726,6 +4848,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         frame_gap_s=turn_gap_s, post_result_grace_s=args.post_result_grace,
         loop_tracker=loop_tracker, first_frame_s=first_frame_s,
         post_result_bg_grace_s=getattr(args, "post_result_bg_grace", None))
+    if sdk_runtime and getattr(state, "api_credit_exhausted", False):
+        outcome = handle_api_credit_exhausted(args, ticket_id, attempt, state, worktree)
+        if outcome is not None:
+            return outcome
     park_ask, park_err = park_card_of(state, prompt, aider_runtime)  # wq#5009
     gate_loop = exit_gate_after_loop(ticket_id, worktree, gate_base, events, state,
                                      killed_reason, parked=bool(park_ask))  # wq#5007
@@ -5929,6 +6055,7 @@ def cmd_run(args):
     if g:
         log(f"wq#5083 security_exclusion: {args.model}@{args.effort} -> {g[0]}@{g[1]}: {g[2]}")
         args.model, args.effort = g[0], g[1]
+    select_runtime(args)  # wq#5211: sdk (API credit) vs claude CLI (subscription)
 
     unmet = deps_unmet(args.ticket)
     if unmet:
@@ -5944,7 +6071,7 @@ def cmd_run(args):
     # initial gate; that path releases the claim it's already holding on deny.
     # wq#4289: the aider runtime spends neither pool these two gates police.
     aider_runtime = runtime_of(args) == "aider"
-    allow, reason = (True, None) if aider_runtime else can_dispatch(args.model)
+    allow, reason = dispatch_gate(args)  # wq#5211: per-runtime pool gate
     if not allow:
         log(f"DEFERRED: wq#{args.ticket} governor denied dispatch before claim: {reason}")
         print("DEFERRED")
@@ -6131,7 +6258,9 @@ def main():
                         help="override for testing against a fake claude shim")
     # wq#4289: default None so FOREMAN_RUNTIME (dispatcher/unit env) can pick it.
     p_run.add_argument("--runtime", choices=RUNTIMES, default=None,
-                        help="claude (default) or aider: the local lumen/code path")
+                        help="claude (default), aider (local lumen/code) or sdk "
+                             "(anthropic SDK on the plan's monthly API credit, wq#5211; "
+                             "auto-selected for eligible tickets while credits last)")
     p_run.set_defaults(func=cmd_run)
 
     # ISSUE-LOG #17: the same replay fworker runs after the child exits, exposed so a

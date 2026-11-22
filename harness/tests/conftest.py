@@ -44,6 +44,7 @@ _root_conftest = _load_root_conftest()
 if _root_conftest is not None:
     _isolate_recipe_store = _root_conftest._isolate_recipe_store
     _isolate_minerva_db_root = _root_conftest._isolate_minerva_db_root
+    _isolate_api_credit = _root_conftest._isolate_api_credit  # wq#5211
 
 
 @pytest.fixture(autouse=True)

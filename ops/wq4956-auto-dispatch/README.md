@@ -8,7 +8,7 @@ this bundle enables it.
 |---|---|
 | `auto-dispatch` | the script (v3). Deployed copy: `/home/lumen/bin/auto-dispatch` |
 | `lumen-auto-dispatch.service`, `.timer` | units, installed in `/etc/systemd/system`, timer disabled |
-| `test_auto_dispatch.py` | 81 cases; every external binary stubbed, including `park` and the admission gate |
+| `test_auto_dispatch.py` | 87 cases; every external binary stubbed, including `park` and the admission gate |
 | `install.sh` | install / `--verify` / `--dry-run`; never enables the timer |
 
 Config: `/home/lumen/foreman/auto-dispatch.yaml` (read its ENABLEMENT NOTES before enabling).
@@ -32,6 +32,17 @@ A ticket whose round is ANSWERED is a resume of an existing session:
 Halt files, the broker-conflict refusal, budget floors, the concurrency ceiling and every
 per-ticket gate still apply to it. `park_resume: {enabled: false}` in the yaml turns the
 hook off. A sweep failure is logged (`park_sweep_error`) and the pass carries on.
+
+## API-credit runtime (wq#5211)
+
+Before the budget floor, each candidate goes through `harness/api_credit.py`'s
+`choose_runtime()`, the same call fworker makes when it claims. A ticket that will run on
+the SDK runtime spends the plan's monthly API credit, not the Max pools, so the Max floors
+do not hold it back. A stale Max usage read no longer halts the pass while credits are
+available: the pass runs API-credit tickets only, and CLI tickets are skipped as
+`budget stale`. Every dispatch/skip line logs `runtime` / `runtime_reason`.
+`api_credit: {enabled: false}` in the yaml restores Max-only behaviour. Once the credit is
+exhausted, the floors apply to everything again.
 
 ## Why this bundle exists
 

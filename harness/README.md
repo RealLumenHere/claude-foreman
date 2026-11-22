@@ -515,3 +515,67 @@ only edits files; fworker then stages the changed paths, runs
 exits 0 even on backend errors, so a run that changed no files must be treated as a
 failure, not a success. The backend URL and key come from
 `/etc/lumen-aider-fworker.env`. The default runtime remains `claude`.
+
+## SDK runtime: spending the plan's monthly API credit (wq#5211)
+
+Max/Ultra plans carry a monthly Claude API credit (Ultra $200, Max $100; it expires each
+billing cycle with no rollover). It pays for Messages API / Agent SDK calls made with a key
+from the Console org linked to the plan. It does **not** pay for Claude Code: Anthropic tags
+Claude Code traffic by its `anthropic-beta: claude-code-*` header, and the same key that
+serves a plain Messages call returns `credit_balance_too_low` once that header is on
+(measured 2026-11-21). So `claude -p` on an API key cannot spend the credit, and a
+non-Claude-Code client is required.
+
+`--runtime sdk` (or auto-selection, below) runs **`fworker_sdk.py`** in place of `claude -p`:
+
+- **Same argv, same stream-json.** fworker builds the usual `build_claude_cmd()` argv and
+  swaps argv[0] (`run_child_sdk`). fworker_sdk emits Claude Code's frames (system/init,
+  assistant, user tool_result, result), so `run_child()` supervises it unchanged:
+  watchdogs, mask screening, heartbeats, kill-tree, RunState, exit-gate, verify_done,
+  park/resume.
+- **Same rails.** The `--settings` hooks run with Claude Code's hook contract (guard.sh and
+  action_gate PreToolUse, stop_gate Stop, lifecycle start/end), and `permissions.allow/deny`
+  is enforced Claude-Code style: deny wins, every segment of a compound Bash command must be
+  allowed, and acceptEdits only covers cwd + `--add-dir`. Tools: Bash, Read, Write, Edit,
+  Grep, Glob. git, fleet-exec and wq go through Bash under the same rules. MCP
+  (`--mcp-config`) is not available.
+- **Transport.** anthropic SDK -> LiteLLM `/v1/messages` with the scoped `foreman-apicredit`
+  virtual key (`/home/lumen/.secrets/foreman-apicredit.token`; models
+  anthropic/claude-opus-5-5 + haiku-5-5; $190 LiteLLM max_budget backstop). The child scrubs
+  the key from every tool subprocess's env. Rolling prompt-cache breakpoints, adaptive
+  thinking with `output_config.effort` from `--effort`, older tool output elided past
+  `FWORKER_SDK_COMPACT_AT` tokens.
+- **Sessions.** `_runs/sdk-sessions/<sid>.json` (+ a Claude-Code-format `.jsonl` transcript
+  the Stop hook reads). SDK session ids start `sdk-`, so a resume never goes to the CLI, and
+  a Claude Code session is never resumed on the SDK.
+
+### Ledger and selection: `api_credit.py`
+
+There is no balance API, so `api_credit.py` is the ledger. State is in
+`/home/lumen/foreman/api-credit/` (config.json, state.json, ledger.jsonl).
+
+- Every API call is priced from the platform pricing table (`PRICES`) and appended to the
+  ledger. Cross-check against LiteLLM's own key spend: `api_credit.py status`.
+- Cycles start on `anchor_day` (13th). `grant_schedule` gives the grant per cycle: Ultra
+  $200 until the 2026-12-13 downgrade, Max $100 after. Available while
+  spend < grant - `reserve_usd` and the cycle isn't flagged exhausted. ntfy fires at 50/80/95%.
+- `credit_balance_too_low`, a LiteLLM budget error, or the local cap flags the cycle
+  exhausted. The worker stops (exit 3, `API_CREDIT_EXHAUSTED`). fworker releases the ticket
+  **uncharged** (`handle_api_credit_exhausted`, EXIT_RUNG_FAULT), and the next dispatch runs
+  it on the CLI. A new cycle id clears the flag on its own.
+- `choose_runtime()` is the single SDK-vs-CLI decision, made by fworker at claim time
+  (`select_runtime`) and by auto-dispatch. In order: explicit `--runtime claude|aider` wins;
+  a resume stays with the session's runtime; `[no-sdk]` / `[sdk]` title markers; config
+  `enabled`/`auto_select`; the routed model must match `eligible_model_re` (opus/sonnet/haiku;
+  Fable stays on the CLI); fire-response is excluded; credits must be available. An explicit
+  `--runtime sdk` with no credits left falls back to the CLI.
+- **Missing or unreadable config = disabled.** Tests run against a scratch ledger
+  (`_isolate_api_credit` in the repo conftest), which fails any test that grows the live ledger.
+
+```bash
+python3 /home/lumen/foreman/harness/api_credit.py status            # spend, cap, LiteLLM cross-check
+python3 /home/lumen/foreman/harness/api_credit.py choose <ticket>   # what fworker would pick
+python3 /home/lumen/foreman/harness/api_credit.py set-prior <usd>   # console spend the ledger never saw
+python3 /home/lumen/foreman/harness/api_credit.py mark-exhausted "<why>" | clear-exhausted
+# off switch: "auto_select": false (explicit --runtime sdk only) or "enabled": false in config.json
+```

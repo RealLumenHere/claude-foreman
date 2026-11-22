@@ -39,8 +39,12 @@ spawned. The ledger (cooldown, per-day attempt cap) must count STARTED dispatche
     The next pass reads _runs/dispatch/<id>.log and refunds the ledger entry that batch
     spent if it says QUEUED.
 
-Scope: Max-subscription capacity only. The per-token Anthropic API key behind
-lumen/claude-* in LiteLLM is NOT a budget this script reads or spends (Frank no-spend rule).
+Scope: Max-subscription capacity, plus (wq#5211) the plan's MONTHLY API CREDIT. A ticket the
+harness's api_credit.choose_runtime() would run on the SDK runtime (fworker_sdk.py, scoped
+foreman-apicredit key) spends that credit, not the Max pools, so the Max budget floors and a
+stale Max usage read do not hold it back; everything else (halts, breaker, concurrency, ticket
+gates, admission) still applies. fworker makes the same choice at claim time, and falls back
+to the CLI when the credit is gone. lumen/claude-* aliases stay unspent (Frank no-spend rule).
 
 usage: auto-dispatch [--dry-run] [--config PATH] [--verbose]
   --dry-run  decide and log to stdout; no dispatch, no router --live, no ntfy, no state writes.
@@ -111,6 +115,8 @@ DEFAULTS = {
     "lock_file": "/home/lumen/foreman/.auto-dispatch.lock",
     "dispatch_run_dir": "/home/lumen/foreman/_runs/dispatch",   # dispatch-batch's RUN_DIR (wq#5117)
     "park_resume": {"enabled": True},
+    # wq#5211: api_credit.py lives in the harness; enabled=False restores Max-only behaviour
+    "api_credit": {"enabled": True, "harness_dir": "/home/lumen/foreman/harness"},
     "bins": {
         "park": "/home/lumen/foreman/harness/park.py",
         "wq": "/home/lumen/bin/wq",
@@ -466,6 +472,34 @@ class Ctx:
         except (OSError, ValueError, KeyError, TypeError) as e:
             return True, "usage state unreadable (%s)" % type(e).__name__, {}
 
+    def sdk_choice(self, tid, t, model):
+        """wq#5211 -> (runtime, sdk_model, reason). runtime "sdk" means fworker will run this
+        ticket on the API credit (api_credit.choose_runtime, the same call fworker makes).
+        Any error -> (None, model, why): the ticket keeps the Max-pool rules."""
+        ac = self.cfg.get("api_credit") or {}
+        if not ac.get("enabled", True):
+            return None, model, "api_credit disabled in auto-dispatch config"
+        try:
+            if ac.get("harness_dir") and ac["harness_dir"] not in sys.path:
+                sys.path.insert(0, ac["harness_dir"])
+            import api_credit
+            return api_credit.choose_runtime(t, model, t.get("archetype") or None,
+                                             resume_session=t.get("resume_session") or None)
+        except Exception as e:  # noqa: BLE001
+            return None, model, "api_credit check failed (%s)" % e
+
+    def sdk_available(self):
+        ac = self.cfg.get("api_credit") or {}
+        if not ac.get("enabled", True):
+            return False
+        try:
+            if ac.get("harness_dir") and ac["harness_dir"] not in sys.path:
+                sys.path.insert(0, ac["harness_dir"])
+            import api_credit
+            return api_credit.available()[0]
+        except Exception:  # noqa: BLE001
+            return False
+
     def budget_check(self, model, stale, detail, limits):
         """-> None if ok else deny reason. Non-Anthropic models don't draw on the Max pools."""
         if not CLOUD_RE.search(model):
@@ -608,7 +642,12 @@ def run_pass(ctx):
 
     stale, detail, limits = ctx.budget_state()
     if stale and cfg["budget"]["on_stale"] == "fail_closed":
-        return ctx.halt("budget: %s (on_stale=fail_closed)" % detail, kind="budget_stale")
+        if not ctx.sdk_available():
+            return ctx.halt("budget: %s (on_stale=fail_closed)" % detail, kind="budget_stale")
+        # wq#5211: the Max read is stale but the API credit is live and needs no Max read;
+        # budget_check below still refuses every ticket that would run on the CLI.
+        ctx.log("budget_stale_sdk_only", detail=detail,
+                note="Max usage stale: only API-credit (sdk runtime) tickets this pass")
 
     cands, seen = [], set()
     try:
@@ -685,10 +724,13 @@ def run_pass(ctx):
             ctx.fail("router", "#%s %s" % (tid, e))
             ctx.skip(tid, lane, str(e), "router-failed")
             continue
-        r = ctx.budget_check(model, stale, detail, limits)
-        if r:
-            ctx.skip(tid, lane, "%s (model %s)" % (r, model), r.split(":")[0])
-            continue
+        runtime, sdk_model, rt_why = ctx.sdk_choice(tid, t, model)  # wq#5211
+        if runtime != "sdk":
+            r = ctx.budget_check(model, stale, detail, limits)
+            if r:
+                ctx.skip(tid, lane, "%s (model %s; runtime claude: %s)" % (r, model, rt_why),
+                         r.split(":")[0])
+                continue
         r = ctx.admission_reason(tid)  # wq#5117: last, so only an otherwise-dispatchable ticket pays for it
         if r:
             ctx.skip(tid, lane, r, "admission-denied")
@@ -696,7 +738,9 @@ def run_pass(ctx):
 
         if ctx.dry_run:
             ctx.log("dispatch", ticket=tid, lane=lane, model=model, model_source=msrc, title=t["title"][:80],
-                    park_resume=tid in park_ready, note="dry-run: dispatch-batch NOT called")
+                    park_resume=tid in park_ready, runtime=runtime or "claude",
+                    sdk_model=sdk_model if runtime == "sdk" else None, runtime_reason=rt_why,
+                    note="dry-run: dispatch-batch NOT called")
             ctx.dispatched.append({"ticket": tid, "title": t["title"], "model": model})
             continue
         ctx.state.setdefault("dispatched", {}).setdefault(str(tid), []).append(time.time())
@@ -708,7 +752,8 @@ def run_pass(ctx):
             continue
         ctx.log("dispatch", ticket=tid, lane=lane, model=model, model_source=msrc,
                 title=t["title"][:80], running_before=running, output=tail,
-                park_resume=tid in park_ready)
+                park_resume=tid in park_ready, runtime=runtime or "claude",
+                sdk_model=sdk_model if runtime == "sdk" else None, runtime_reason=rt_why)
         ctx.dispatched.append({"ticket": tid, "title": t["title"], "model": model})
 
     return ctx.finish(0)

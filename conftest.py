@@ -48,6 +48,39 @@ def _isolate_recipe_store(monkeypatch, tmp_path):
         monkeypatch.setattr(rc, "STORE_PATH", str(tmp_path / "recipes.json"))
 
 
+def _live_size(path, _stat=os.stat):
+    # bound at import: tests monkeypatch os.path.exists/getsize for their own fixtures
+    try:
+        return _stat(path).st_size
+    except OSError:
+        return 0
+
+
+@pytest.fixture(autouse=True)
+def _isolate_api_credit(monkeypatch, tmp_path):
+    """wq#5211: fworker's claim path asks harness/api_credit.py whether to run the ticket on
+    the SDK runtime (real Opus calls on the plan's API credit). Against the live ledger
+    (/home/lumen/foreman/api-credit) an end-to-end test would spawn the real fworker_sdk.py
+    and spend real credit on its fixture prompt -- it did, once, while this was built.
+    Point every test, in-process and subprocess, at an empty scratch ledger: no config
+    file means disabled. Tests that exercise the runtime write their own config."""
+    d = tmp_path / "api-credit-isolated"
+    monkeypatch.setenv("FOREMAN_API_CREDIT_DIR", str(d))
+    ac = sys.modules.get("api_credit")
+    if ac is not None:
+        for name, leaf in (("STATE_DIR", ""), ("CONFIG_PATH", "config.json"),
+                           ("STATE_PATH", "state.json"), ("LEDGER_PATH", "ledger.jsonl"),
+                           ("LOCK_PATH", ".lock")):
+            monkeypatch.setattr(ac, name, str(d / leaf) if leaf else str(d))
+    live = "/home/lumen/foreman/api-credit/ledger.jsonl"
+    before = _live_size(live)
+    yield
+    after = _live_size(live)
+    if after > before:
+        pytest.fail(f"wq#5211: this test wrote the LIVE API-credit ledger ({live}, "
+                    f"{before}->{after} bytes): it spent real credit", pytrace=False)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_minerva_db_root(monkeypatch, tmp_path):
     """wq#2784: fworker's real attempt-end path (episodic.commit_to_archive ->
