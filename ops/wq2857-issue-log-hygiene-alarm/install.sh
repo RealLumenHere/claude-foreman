@@ -6,6 +6,11 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 
+# wq#5268: 0 = intended-off (disabled by the 2026-10-08 subtraction). A deliberate
+# re-enable flips this to 1, which makes install enable+start the timer and --verify
+# assert it enabled, active and scheduled. Not an env override: the intent lives here.
+HYGIENE_ON=0
+
 # wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
 #
 # wq#2877 added this handler. This bundle is what makes wq#2817's probe_pointers.py live:
@@ -19,17 +24,29 @@ if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vunit_file "$SRC/issue-log-hygiene.service" /etc/systemd/system/issue-log-hygiene.service
   vunit_file "$SRC/issue-log-hygiene.timer"   /etc/systemd/system/issue-log-hygiene.timer
-  venabled   issue-log-hygiene.timer
-  vactive    issue-log-hygiene.timer
-  # wq#4910: no vtimer_scheduled for issue-log-hygiene.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5268: issue-log-hygiene.timer is intended-off: the 2026-10-08 subtraction disabled it
+  # on purpose (/home/lumen/scratch/subtraction/timers-disable-list.txt:60). wq#4910 dropped
+  # vtimer_scheduled for that reason but left venabled/vactive, so --verify failed forever
+  # and filed an ops-root-apply telling the reader to run this script as root, whose
+  # `enable --now` would have undone the subtraction (same class as wq#5264/wq#5257).
+  # The unit files are still verified; the timer's state is only when HYGIENE_ON=1.
+  if [ "$HYGIENE_ON" = 1 ]; then
+    venabled         issue-log-hygiene.timer
+    vactive          issue-log-hygiene.timer
+    vtimer_scheduled issue-log-hygiene.timer
+  fi
   vdone
 fi
 
 cp "$SRC/issue-log-hygiene.service" "$SRC/issue-log-hygiene.timer" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now issue-log-hygiene.timer
+if [ "$HYGIENE_ON" = 1 ]; then
+  systemctl enable --now issue-log-hygiene.timer
+else
+  # wq#5268: intended-off; installing files must not undo the 2026-10-08 subtraction.
+  echo "issue-log-hygiene units installed; timer left as-is (intended-off, HYGIENE_ON=0)"
+  exit 0
+fi
 
 echo "issue-log-hygiene.timer installed; first run at boot+3min, then every 30min"
 echo "manual run:   systemctl start issue-log-hygiene.service"

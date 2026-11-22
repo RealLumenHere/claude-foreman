@@ -23,7 +23,11 @@ Root-only, via `lumen-run` (this repo's convention for privileged unit installs)
 ```
 lumen-run start --root -- bash /home/lumen/foreman/ops/wq2857-issue-log-hygiene-alarm/install.sh
 ```
-Installs `issue-log-hygiene.timer`/`.service`, enabled and started immediately. Manual run:
+Installs `issue-log-hygiene.timer`/`.service`. wq#5268: the timer is intended-off (2026-10-08
+subtraction, `/home/lumen/scratch/subtraction/timers-disable-list.txt:60`), so `HYGIENE_ON=0`
+ships in `install.sh`: install copies the units but leaves the timer alone, and `--verify` checks
+only the unit files. Re-enabling is a decision: flip `HYGIENE_ON=1`, which makes install
+`enable --now` the timer and `--verify` assert enabled+active+scheduled. Manual run:
 `systemctl start issue-log-hygiene.service`. Logs: `journalctl -u issue-log-hygiene.service`.
 Last summary line: `/home/lumen/logs/.issue-log-hygiene.laststate` (same convention
 `session-handoff`'s `DETECTORS` list reads for the other Day-0 detectors — add
