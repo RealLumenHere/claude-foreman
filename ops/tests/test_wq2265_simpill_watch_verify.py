@@ -60,18 +60,34 @@ class SimpillWatchVerify(unittest.TestCase):
         rc, out, calls = _run("enabled", "active")
         self.assertEqual(rc, 0, out)
         self.assertIn("VERIFY OK", out)
-        self.assertTrue(calls)
         for call in calls:
             self.assertTrue(call.startswith(("is-enabled", "is-active")), call)
 
-    def test_disabled_inactive_timer_fails(self):
+    def test_disabled_inactive_timer_is_not_a_miss(self):
+        # wq#5262: the timer is intended-off (2026-10-08 subtraction), so a disabled,
+        # inactive timer must not make --verify fail or file an ops-root-apply.
         rc, out, calls = _run("disabled", "inactive")
-        self.assertEqual(rc, 1, out)
-        self.assertIn("MISS not enabled: lumen-simpill-watch.timer", out)
-        self.assertIn("MISS not active: lumen-simpill-watch.timer", out)
-        self.assertNotIn("VERIFY OK", out)
+        self.assertNotIn("MISS not enabled: lumen-simpill-watch.timer", out)
+        self.assertNotIn("MISS not active: lumen-simpill-watch.timer", out)
+        self.assertNotIn("lumen-simpill-watch.timer", "\n".join(calls))
         for call in calls:
             self.assertTrue(call.startswith(("is-enabled", "is-active")), call)
+
+    def test_verify_has_no_timer_state_gate(self):
+        with open(INSTALL) as fh:
+            text = fh.read()
+        verify = text[text.index("--verify ]"):text.index("vdone")]
+        for gate in ("venabled", "vactive", "vtimer_scheduled"):
+            for line in verify.splitlines():
+                if line.strip().startswith(gate):
+                    self.fail("verify still gates timer state: " + line.strip())
+
+    def test_install_does_not_enable_without_opt_in(self):
+        with open(INSTALL) as fh:
+            text = fh.read()
+        self.assertIn('if [ "${SIMPILL_WATCH_ON:-0}" != 1 ]; then', text)
+        self.assertLess(text.index("SIMPILL_WATCH_ON:-0"),
+                        text.index("\nsystemctl enable --now"))
 
 
 if __name__ == "__main__":

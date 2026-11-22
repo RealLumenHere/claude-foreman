@@ -20,11 +20,14 @@ if [ "${1:-}" = --verify ]; then
   . "$(cd "$(dirname "$0")" && pwd)/../_verify.sh"
   vunit_file "$SRC/lumen-simpill-watch.service" /etc/systemd/system/lumen-simpill-watch.service
   vunit_file "$SRC/lumen-simpill-watch.timer"   /etc/systemd/system/lumen-simpill-watch.timer
-  venabled   lumen-simpill-watch.timer
-  vactive    lumen-simpill-watch.timer
-  # wq#4910: no vtimer_scheduled for lumen-simpill-watch.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5262: no venabled/vactive/vtimer_scheduled for lumen-simpill-watch.timer:
+  # intended-off, disabled by the 2026-10-08 subtraction
+  # (/home/lumen/scratch/subtraction/timers-disable-phase2.txt:41, phase2b-results.txt:42).
+  # Asserting enabled+active made --verify fail permanently, and the ops-root-apply it filed
+  # told the reader to run this script as root, which runs `systemctl enable --now` and
+  # undoes the subtraction. The unit files, baseline and repo config are still checked.
+  # Re-enabling the timer is a decision, not a heal; whoever makes it adds
+  # venabled/vactive/vtimer_scheduled here.
   vcontains  "$STATE" '"baselined": *true'
   vcontains  "$REPOS" '"fork_owner": *"[^"]+"'
   vcontains  "$REPOS" '"us": *\[ *"[^"]+"'
@@ -34,6 +37,14 @@ fi
 install -D -m 644 "$SRC/lumen-simpill-watch.service" /etc/systemd/system/lumen-simpill-watch.service
 install -D -m 644 "$SRC/lumen-simpill-watch.timer"   /etc/systemd/system/lumen-simpill-watch.timer
 systemctl daemon-reload
+
+# wq#5262: the timer is intended-off (2026-10-08 subtraction). A plain re-run refreshes
+# the unit files only; turning the producer back on takes an explicit
+# SIMPILL_WATCH_ON=1, so an ops-root-apply "run install.sh as root" cannot undo it.
+if [ "${SIMPILL_WATCH_ON:-0}" != 1 ]; then
+  echo "lumen-simpill-watch unit files refreshed; timer left as-is (intended-off; SIMPILL_WATCH_ON=1 enables)"
+  exit 0
+fi
 systemctl enable --now lumen-simpill-watch.timer
 
 # First run baselines every watched repo (records current events, files nothing).
