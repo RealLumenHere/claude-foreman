@@ -1,8 +1,8 @@
 """wq#5139: energize-confirm bridge + serial-maksoor allowlist.
 
-Offline: the gate runs over an in-memory fake serial-mcp (same tool names), and tokens come from a
-temp ENERGIZE_CONFIRM_DIR written through energize_confirm's own record format, so nothing reaches
-Maksoor or a UART. Run with the shared guard venv:
+Offline: the gate runs over an in-memory fake serial-mcp (same tool names), and tokens are minted
+by energize_confirm itself against a temp verifier/token dir (harness/tests/ec_testkit.py, wq#5216),
+so nothing reaches Maksoor or a UART. Run with the shared guard venv:
   env -u PYTHONPATH ~/.local/share/mcp/_guard/venv/bin/python -m pytest -q ops/wq5139-serial-maksoor-guard
 """
 import asyncio
@@ -21,6 +21,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "..", "harness"))
 import http_stdio_bridge as bridge  # noqa: E402
 import energize_confirm as ec  # noqa: E402
+sys.path.insert(0, os.path.join(HERE, "..", "..", "harness", "tests"))
+import ec_testkit as ec_kit  # noqa: E402
 
 ALLOW = [l.strip() for l in open(os.path.join(HERE, "serial-allow.txt")) if l.strip() and not l.startswith("#")]
 HIDDEN = {"configure", "save_profile", "delete_profile", "rollback_profile", "export_log"}
@@ -70,7 +72,14 @@ def gated(calls):
 
 
 def mint(tmp_path, cap, ttl=60):
+    # wq#5216: a real passphrase-signed token (ec_kit's test passphrase), not a hand-written file.
+    return ec_kit.mint(ec, cap, ttl_seconds=ttl)
+
+
+def hand_written(cap, ttl=60):
+    """The pre-wq#5216 record shape written straight into the token dir: must be refused."""
     tok = "t-" + hashlib.sha256(f"{cap}{time.time()}".encode()).hexdigest()[:24]
+    os.makedirs(ec.TOKEN_DIR, exist_ok=True)
     path = os.path.join(ec.TOKEN_DIR, hashlib.sha256(tok.encode()).hexdigest() + ".json")
     with open(path, "w") as f:
         json.dump({"capability": cap, "expires_at": time.time() + ttl}, f)
@@ -79,7 +88,7 @@ def mint(tmp_path, cap, ttl=60):
 
 @pytest.fixture(autouse=True)
 def token_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(ec, "TOKEN_DIR", str(tmp_path))
+    ec_kit.install(ec, tmp_path, monkeypatch)
 
 
 def run(coro):
@@ -127,6 +136,14 @@ def test_write_with_token_forwarded_stripped_and_single_use(tmp_path):
     assert calls == [("write", "c", "x")]  # backend never saw confirm_token
     err, _ = run(call(srv, "write", {"connection_id": "c", "data": "y", "confirm_token": tok}))
     assert err and len(calls) == 1
+
+
+def test_hand_written_token_file_refused(tmp_path):
+    # wq#5216: a token file written straight into the dir, no passphrase involved.
+    calls = []
+    tok = hand_written("serial.write")
+    err, _ = run(call(gated(calls), "write", {"connection_id": "c", "data": "x", "confirm_token": tok}))
+    assert err and calls == []
 
 
 def test_expired_token_refused(tmp_path):

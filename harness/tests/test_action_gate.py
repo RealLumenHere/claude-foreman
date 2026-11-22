@@ -17,6 +17,9 @@ import action_gate as ag
 import energize_confirm as ec
 import read_dir_sweep as _rds
 
+sys.path.insert(0, os.path.dirname(__file__))
+import ec_testkit as ec_kit  # noqa: E402
+
 GATE = os.path.join(os.path.dirname(__file__), "..", "action_gate.py")
 
 
@@ -596,33 +599,90 @@ def test_mcp_energize_blocked_without_token(tmp_path, tool_name, capability, ext
     assert capability in err
 
 
+def run_hook_ec(tmp_path, monkeypatch, payload, env_extra=None):
+    """run_hook with energize_confirm pointed at the tmp dirs ec_kit.install() set
+    (wq#5216: the module reads no env var, so the hook subprocess runs through
+    ec_testkit's patching wrapper)."""
+    assert ec.VERIFIER.startswith(str(tmp_path)), "call ec_kit.install() first"
+    wrapper = ec_kit.wrapper(tmp_path, ec.TOKEN_DIR, ec.VERIFIER, os.path.abspath(GATE))
+    env = dict(os.environ)
+    env.pop(ag.GATE_RULES_ENV, None)
+    env.setdefault("FOREMAN_JUDGE_SHADOW", "0")
+    env.update(env_extra or {})
+    p = subprocess.run([sys.executable, wrapper, "hook"], input=json.dumps(payload),
+                       capture_output=True, text=True, env=env, timeout=60)
+    return p.returncode, p.stderr
+
+
 @pytest.mark.parametrize("tool_name,capability,extra_input", MCP_ENERGIZE_CASES)
 def test_mcp_energize_allowed_with_valid_token(tmp_path, monkeypatch, tool_name, capability, extra_input):
-    token_dir = str(tmp_path / ".energize-confirm")
-    monkeypatch.setattr(ec, "TOKEN_DIR", token_dir)
-    token = ec.issue_token(capability, _isatty=True)
+    ec_kit.install(ec, tmp_path, monkeypatch)
+    token = ec_kit.mint(ec, capability)
     payload_input = dict(extra_input)
     payload_input["confirm_token"] = token
-    rc, err = run_hook(mcp_payload(tool_name, payload_input), {
-        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
-        "ENERGIZE_CONFIRM_DIR": token_dir,
-    })
+    rc, err = run_hook_ec(tmp_path, monkeypatch, mcp_payload(tool_name, payload_input), {
+        ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
     assert rc == 0, err
 
 
 def test_mcp_energize_token_is_single_use_at_the_hook(tmp_path, monkeypatch):
-    token_dir = str(tmp_path / ".energize-confirm")
-    monkeypatch.setattr(ec, "TOKEN_DIR", token_dir)
-    token = ec.issue_token("flashrom.erase_chip", _isatty=True)
-    env = {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path),
-           "ENERGIZE_CONFIRM_DIR": token_dir}
+    ec_kit.install(ec, tmp_path, monkeypatch)
+    token = ec_kit.mint(ec, "flashrom.erase_chip")
+    env = {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)}
     payload = mcp_payload("mcp__limpet-flashrom__erase_chip",
                            {"programmer": "ch341a_spi", "confirm_token": token})
-    rc1, err1 = run_hook(payload, env)
-    rc2, err2 = run_hook(payload, env)  # replay the same token
+    rc1, err1 = run_hook_ec(tmp_path, monkeypatch, payload, env)
+    rc2, err2 = run_hook_ec(tmp_path, monkeypatch, payload, env)  # replay the same token
     assert rc1 == 0, err1
     assert rc2 == 2
     assert "confirm_token" in err2
+
+
+def test_mcp_energize_hand_written_token_file_is_blocked_at_the_hook(tmp_path, monkeypatch):
+    # wq#5216: the pre-fix record shape, written straight into the token dir.
+    token_dir, _ = ec_kit.install(ec, tmp_path, monkeypatch)
+    token = "d" * 64
+    os.makedirs(token_dir, exist_ok=True)
+    with open(os.path.join(token_dir, hashlib.sha256(token.encode()).hexdigest() + ".json"), "w") as f:
+        json.dump({"capability": "serial.write", "expires_at": 4102444800.0}, f)
+    rc, err = run_hook_ec(tmp_path, monkeypatch, mcp_payload(
+        "mcp__serial-maksoor__write", {"port": "/dev/ttyUSB0", "data": "AT", "confirm_token": token}),
+        {ag.HANDOFF_ENV: str(tmp_path), "FOREMAN_EVENTS_DIR": str(tmp_path)})
+    assert rc == 2
+    assert "confirm_token" in err
+
+
+EC_PY = "/home/lumen/foreman/harness/energize_confirm.py"
+
+
+@pytest.mark.parametrize("cmd", [
+    f"script -qec 'python3 {EC_PY} issue serial.write' /dev/null",
+    f"python3 {EC_PY} issue flashrom.erase_chip",
+    f"python3 {EC_PY} set-passphrase",
+    "python3 - <<'EOF'\nimport energize_confirm as e\nprint(e.issue_token('serial.write'))\nEOF",
+    "cp k.json /home/lumen/.config/energize-confirm/verifier.json",
+    "printf x > /home/lumen/re/.energize-confirm/f.json",
+])
+def test_wq5216_energize_confirm_mint_and_dirs_are_floored_red(cmd):
+    verdict, reason, _snap, hw_floor = ag.classify_bash(cmd, {})
+    assert verdict == "RED" and hw_floor is True, (verdict, reason)
+    assert "wq#5216" in reason
+
+
+@pytest.mark.parametrize("cmd", [
+    f"python3 {EC_PY} verify serial.write abc",
+    "grep -n energize_confirm harness/action_gate.py",
+])
+def test_wq5216_energize_confirm_verify_stays_green(cmd):
+    assert ag.classify_bash(cmd, {})[0] == "GREEN"
+
+
+@pytest.mark.parametrize("path", ["/home/lumen/.config/energize-confirm/verifier.json",
+                                  "/home/lumen/re/.energize-confirm/x.json"])
+def test_wq5216_file_tool_into_energize_confirm_dirs_is_floored_red(path):
+    for tool in ("Write", "Edit"):
+        verdict, reason, _snap, hw_floor = ag.classify_file_tool(tool, path, {})
+        assert verdict == "RED" and hw_floor is True, (tool, reason)
 
 
 def test_mcp_non_hardware_tool_is_green(tmp_path):

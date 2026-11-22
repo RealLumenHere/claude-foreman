@@ -59,7 +59,7 @@ def _verify_confirm_token(capability: str, confirm_token: str) -> bool:
 
 def _require_confirm_token(capability: str, confirm_token: str) -> None:
     """Refuse `capability` unless `confirm_token` was minted by an operator
-    (energize_confirm.issue_token, which itself refuses outside a real TTY --
+    (energize_confirm.issue_token, which needs Frank's passphrase, wq#5216 --
     see harness/energize_confirm.py). A bool the calling model passes does not
     count (hal-spec.md §9.2a)."""
     if not confirm_token:

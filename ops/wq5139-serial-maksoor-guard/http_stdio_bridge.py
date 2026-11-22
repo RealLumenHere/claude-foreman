@@ -14,7 +14,7 @@ This bridge:
   * adds an optional string property `confirm_token` to the input schema of each ENERGIZING tool, so the
     guard's strict schema check accepts it and the model sees it documented;
   * on a call to an ENERGIZING tool, verifies the token with energize_confirm.verify_token(token,
-    "serial.<tool>") (single-use, capability-scoped, mintable only from a real TTY: `python3
+    "serial.<tool>") (single-use, capability-scoped, mintable only with Frank's passphrase, wq#5216: `python3
     /home/lumen/foreman/harness/energize_confirm.py issue serial.<tool>`), and refuses without one;
   * strips `confirm_token` before forwarding, so serial-mcp never sees an undeclared argument;
   * refuses `confirm_token` on any other tool (schema check upstream would too; belt and braces).

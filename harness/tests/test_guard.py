@@ -1545,3 +1545,39 @@ def test_wq3861_real_exec_shapes_still_blocked():
         if rc != 2:
             failures.append((inp, rc, stderr))
     assert not failures, f"expected exit 2 (block), got: {failures}"
+
+
+# wq#5216: an agent must not drive the energize-confirm mint (the ticket's own
+# script(1) shape included) or touch the verifier/token dirs; verify stays open.
+EC = "/home/lumen/foreman/harness/energize_confirm.py"
+ENERGIZE_CONFIRM_MUST_BLOCK = [
+    ("Bash", {"command": f"script -qec 'python3 {EC} issue serial.write' /dev/null"}),
+    ("Bash", {"command": f"python3 {EC} issue openocd.flash_firmware --ttl 60"}),
+    ("Bash", {"command": "cd /home/lumen/foreman/harness && python3 energize_confirm.py issue serial.write"}),
+    ("Bash", {"command": f"python3 \"{EC}\" set-passphrase"}),
+    ("Bash", {"command": "python3 -c 'import energize_confirm as e; print(e.issue_token(\"serial.write\"))'"}),
+    ("Bash", {"command": "cp my.json /home/lumen/.config/energize-confirm/verifier.json"}),
+    ("Bash", {"command": "ls ~/re/.energize-confirm"}),
+    ("Write", {"file_path": "/home/lumen/.config/energize-confirm/verifier.json", "content": "{}"}),
+    ("Write", {"file_path": "/home/lumen/re/.energize-confirm/" + "e" * 64 + ".json", "content": "{}"}),
+    ("Edit", {"file_path": "/home/lumen/.config/energize-confirm/verifier.json",
+              "old_string": "a", "new_string": "b"}),
+]
+ENERGIZE_CONFIRM_MUST_ALLOW = [
+    ("Bash", {"command": f"python3 {EC} verify serial.write abc"}),
+    ("Bash", {"command": "grep -n energize_confirm harness/action_gate.py"}),
+    ("Bash", {"command": "python3 -m pytest -q harness/tests/test_energize_confirm.py"}),
+]
+
+
+@pytest.mark.parametrize("tool,inp", ENERGIZE_CONFIRM_MUST_BLOCK)
+def test_wq5216_energize_confirm_mint_and_dirs_blocked(tool, inp):
+    rc, stderr = run_guard(tool, inp)
+    assert rc == 2, stderr
+    assert "energize-confirm" in stderr
+
+
+@pytest.mark.parametrize("tool,inp", ENERGIZE_CONFIRM_MUST_ALLOW)
+def test_wq5216_energize_confirm_verify_and_mentions_allowed(tool, inp):
+    rc, stderr = run_guard(tool, inp)
+    assert rc == 0, stderr

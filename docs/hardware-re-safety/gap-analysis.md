@@ -224,6 +224,16 @@ during this audit.
   `plugins/limpet-plugin-flashrom/mcp/server.py:51-`), so the gate holds even for a non-hook
   client. Tests: `harness/tests/test_energize_confirm.py`, `harness/tests/test_action_gate.py -k
   "mcp or energize or confirm"` (25 passed, 2026-10-28).
+  *Status (wq#5216):* the mint's "a human is at the keyboard" proof was `sys.stdin.isatty()`,
+  which `script -qec "python3 energize_confirm.py issue serial.<tool>" /dev/null` satisfies from
+  any agent shell, and token files were unsigned in an env-overridable dir. Minting now needs
+  Frank's passphrase (`energize_confirm.py set-passphrase`, once): scrypt stretches it into an
+  Ed25519 key, only the public key is stored at the fixed path
+  `/home/lumen/.config/energize-confirm/verifier.json`, and `verify_token` rejects any token
+  record that key did not sign, so a hand-written file fails even with every on-box file
+  readable. No env var redirects either directory. `guard.sh` and `action_gate.py`
+  (`ENERGIZE_CONFIRM_RED`, floored) refuse the mint CLI and both directories for agent sessions.
+  Until Frank sets the passphrase every energizing call stays refused (fail-closed).
 - **T3** Per-target evidence manifest for write-class actions (datasheet ref, flash layout,
   recovery image path plus sha256 verified at hook time). Write-protect known-good dumps. Add
   `.fworker-rules.yaml` with `hardware_class` for the Limpet/Telpo/ESP32 work repos.

@@ -27,6 +27,8 @@ _ec_spec = importlib.util.spec_from_file_location("energize_confirm_integration"
 energize_confirm = importlib.util.module_from_spec(_ec_spec)
 sys.modules["energize_confirm_integration"] = energize_confirm
 _ec_spec.loader.exec_module(energize_confirm)
+sys.path.insert(0, str(_ENERGIZE_CONFIRM_PATH.parent / "tests"))
+import ec_testkit as ec_kit  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
     shutil.which("flashrom") is None, reason="flashrom binary not installed"
@@ -51,13 +53,13 @@ def test_read_write_verify_round_trip_real_binary(tmp_path, monkeypatch):
 
     # wq#4747: write_flash now refuses without a real operator-issued confirm
     # token. Mint one end-to-end (no mocking) against this worktree's own
-    # energize_confirm.py, in a scratch token dir so this test never touches
-    # the live ~/re/.energize-confirm store.
-    token_dir = str(tmp_path / ".energize-confirm")
-    monkeypatch.setenv("ENERGIZE_CONFIRM_DIR", token_dir)  # read by the verify subprocess
-    monkeypatch.setattr(energize_confirm, "TOKEN_DIR", token_dir)  # read in-process below
-    monkeypatch.setattr(ops, "ENERGIZE_CONFIRM_SCRIPT", _ENERGIZE_CONFIRM_PATH)
-    token = energize_confirm.issue_token("flashrom.write_flash", _isatty=True)
+    # energize_confirm.py, with a scratch verifier/token dir so this test never
+    # touches the live store. wq#5216: the module reads no env var, so the
+    # verify subprocess runs through ec_testkit's patching wrapper.
+    token_dir, verifier = ec_kit.install(energize_confirm, tmp_path, monkeypatch)
+    monkeypatch.setattr(ops, "ENERGIZE_CONFIRM_SCRIPT",
+                        Path(ec_kit.wrapper(tmp_path, token_dir, verifier, "ec")))
+    token = ec_kit.mint(energize_confirm, "flashrom.write_flash")
 
     write_result = ops.write_flash(PROGRAMMER, str(dump), confirm_token=token)
     assert write_result["ok"] is True

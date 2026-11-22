@@ -299,6 +299,14 @@ Bash)
     if printf '%s' "$target" | grep -qE '/home/lumen/\.secrets\b'; then
       block "denied path: /home/lumen/.secrets (wq#616 static oauth token lives there)" "$RAW_CMD"
     fi
+    # wq#5216: energize-confirm tokens unlock target-energizing hardware MCP tools. Minting
+    # needs Frank's passphrase (harness/energize_confirm.py); this denies an agent even
+    # trying (script(1) pty + prompt) and touching the verifier/token dirs (swapping in
+    # its own public key). Same patterns as action_gate.py ENERGIZE_CONFIRM_RED.
+    # `energize_confirm.py verify` stays allowed.
+    if printf '%s' "$target" | grep -qE "energize_confirm(\.py)?['\"]?[[:space:]]+(issue|set-passphrase)\b|(^|[^[:alnum:]_])(issue_token|set_passphrase|_write_verifier)[[:space:]]*\(|(\.config/energize-confirm|re/\.energize-confirm)\b"; then
+      block "denied: energize-confirm mint/passphrase or its verifier/token dir (Frank-only, wq#5216)" "$RAW_CMD"
+    fi
     # Bash-side twin of the Read/Grep credential deny below: the credentials file, its
     # timestamped .bak copies, and the minerva context sections that mirror it (027 +
     # the sections.json index) sit inside dirs workers get via needs:dir.
@@ -674,6 +682,10 @@ Read|Edit|Write|Grep|Glob)
     case "$CHECK_PATH" in
       *.env|*.credentials.json|*claude_credentials.md|*claude_credentials.md.*|/home/lumen/minerva/context/sections/*credentials*|/home/lumen/minerva/context/sections.json|/home/lumen/minerva/context/sections.json.*|/home/lumen/agent/.env|/home/lumen/agent/.env/*|/home/lumen/agent/.env.*|*/.claude/*|/home/lumen/.claude/*|/home/lumen/.secrets|/home/lumen/.secrets/*|/var/lib/token-engine|/var/lib/token-engine/*|/home/lumen/logs/supergateway|/home/lumen/logs/supergateway/*)
         block "denied path: $CHECK_PATH" "$CHECK_PATH" ;;
+      # wq#5216: energize-confirm verifier (Frank's public key) and token dir. A
+      # Write here could swap in an agent-held key; nothing in them is worker work.
+      */.config/energize-confirm|*/.config/energize-confirm/*|*/re/.energize-confirm|*/re/.energize-confirm/*)
+        block "denied path: $CHECK_PATH (energize-confirm verifier/token dir, Frank-only, wq#5216)" "$CHECK_PATH" ;;
       # wq#2514: git's plaintext credential store and its .bak copies. Same set
       # capability_lint.DIR_DENY_BASENAME_GLOBS_HOME hard-denies as a grant; without
       # it here a Read by absolute path went through and burned every token in it.

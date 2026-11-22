@@ -248,6 +248,24 @@ BUILTIN_AMBER = [
 
 _MUTATION_MARKERS = re.compile(r'(\brm\b|\bmv\b|\bsed\b[^|;&]*-i|\btee\b|>|\btruncate\b|\bcp\b)')
 
+# wq#5216: the energize-confirm mint path and its two directories. Minting needs
+# Frank's passphrase (energize_confirm.py), so an agent cannot mint by driving the CLI
+# through a script(1) pty; these rules additionally keep an agent from trying (prompt
+# brute force, typing a passphrase it saw somewhere) and from tampering with the
+# verifier (swapping in its own public key) or the token dir. Matched on the raw
+# command, not the heredoc-stripped copy, so `bash <<EOF ... EOF` cannot hide it.
+# `energize_confirm.py verify` and plain mentions of the module stay GREEN. Floored:
+# a judge allow must never open the gate in front of a target-energizing tool.
+ENERGIZE_CONFIRM_DIRS_RE = r'(\.config/energize-confirm|re/\.energize-confirm)\b'
+ENERGIZE_CONFIRM_RED = [
+    (r'\benergize_confirm(\.py)?\b[\'"]?\s+(issue|set-passphrase)\b',
+     "energize-confirm token mint/passphrase CLI (Frank-only, wq#5216)"),
+    (r'\b(issue_token|set_passphrase|_write_verifier)\s*\(',
+     "energize-confirm token mint/passphrase call (Frank-only, wq#5216)"),
+    (ENERGIZE_CONFIRM_DIRS_RE,
+     "energize-confirm verifier/token directory (Frank-only, wq#5216)"),
+]
+
 # --------------------------------------------------------------------------
 # wq#1006 — research phase gate (wires the declared phase_gates:[research,...]).
 # A project with hardware_class set REQUIRES a non-empty PRIOR_ART.md before
@@ -868,6 +886,9 @@ def classify_bash(cmd, rules, cwd=None):
             return "RED", r, None, False
     hw_class = bool(rules.get("hardware_class"))
     for target in targets:
+        for pat, reason in ENERGIZE_CONFIRM_RED:
+            if re.search(pat, target, re.IGNORECASE):
+                return "RED", reason, None, True
         # gate-tamper: any mutation touching a rules file is RED
         if RULES_BASENAME.rsplit(".", 1)[0] in target and _MUTATION_MARKERS.search(target):
             return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None, False
@@ -931,6 +952,10 @@ def classify_file_tool(tool_name, file_path, rules):
     base = os.path.basename(file_path)
     if base == RULES_BASENAME or base.startswith(".fworker-rules"):
         return "RED", "write/edit of .fworker-rules.yaml (gate tamper)", None, False
+    if re.search(ENERGIZE_CONFIRM_DIRS_RE, os.path.realpath(file_path)) or \
+            re.search(ENERGIZE_CONFIRM_DIRS_RE, file_path):
+        return ("RED", f"{tool_name} into the energize-confirm verifier/token directory "
+                "(Frank-only, wq#5216)", None, True)
     # wq#1006: PRIOR_ART.md is machine-written by fleet-search only — a hand
     # Write/Edit would open the research gate without research.
     if base == "PRIOR_ART.md" and _research_gate_required(rules):
