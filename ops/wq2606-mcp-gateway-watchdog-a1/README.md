@@ -52,7 +52,11 @@ different signals; this ticket adds the liveness one, per
   own probe is what restarts it from here on. Added by wq#2637's verify pass:
   `install.sh --verify` (ops/VERIFY_CONTRACT.md, wq#1696) — read-only, checks
   the watchdog script, both units, the cloudflared drop-in and the logrotate
-  config against what's actually live, and enabled+active on the timer. Runs
+  config against what's actually live, and (only when `WATCHDOG_ON=1`)
+  enabled+active+scheduled on the timer. wq#5264: the timer is intended-off
+  (2026-10-08 subtraction, `scratch/subtraction/timers-disable-list.txt:79`),
+  so `WATCHDOG_ON=0` ships: install leaves the timer alone and --verify does
+  not assert its state. Re-enabling is a decision: flip `WATCHDOG_ON=1`. Runs
   clean today for the `/home/lumen/bin` copy but reports `VERIFY FAIL (6)`
   for everything else, since none of the root-owned artifacts are installed
   yet (see "What this does NOT cover" below).

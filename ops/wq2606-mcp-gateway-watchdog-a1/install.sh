@@ -17,6 +17,11 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 GATEWAY_UNIT=${WQ2606_GATEWAY_UNIT:-desktop-commander-mcp}
 GATEWAY_PORT=${WQ2606_GATEWAY_PORT:-3100}
 
+# wq#5264: 0 = intended-off (disabled by the 2026-10-08 subtraction). A deliberate
+# re-enable flips this to 1, which makes install enable+start the timer and --verify
+# assert it enabled, active and scheduled. Not an env override: the intent lives here.
+WATCHDOG_ON=0
+
 # wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install step.
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
@@ -27,11 +32,18 @@ if [ "${1:-}" = --verify ]; then
   vfile "$EXPECT_SERVICE" /etc/systemd/system/mcp-gateway-watchdog.service
   rm -f "$EXPECT_SERVICE"
   vunit_file "$HERE/mcp-gateway-watchdog.timer" /etc/systemd/system/mcp-gateway-watchdog.timer
-  venabled mcp-gateway-watchdog.timer
-  vactive mcp-gateway-watchdog.timer
-  # wq#4910: no vtimer_scheduled for mcp-gateway-watchdog.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5264: mcp-gateway-watchdog.timer is intended-off: the 2026-10-08 subtraction disabled
+  # it on purpose (/home/lumen/scratch/subtraction/timers-disable-list.txt:79). wq#4910
+  # dropped vtimer_scheduled for that reason but left venabled/vactive, so --verify failed
+  # forever and filed an ops-root-apply telling the reader to run this script as root,
+  # whose `enable --now` would have undone the subtraction (same class as wq#5257/wq#5259).
+  # The unit files and installed copies are still verified; the timer's state is not.
+  # Re-enabling it is a decision, not a heal: whoever makes it sets WATCHDOG_ON=1 above.
+  if [ "$WATCHDOG_ON" = 1 ]; then
+    venabled mcp-gateway-watchdog.timer
+    vactive mcp-gateway-watchdog.timer
+    vtimer_scheduled mcp-gateway-watchdog.timer
+  fi
   vfile "$HERE/cloudflared-metrics.conf" /etc/systemd/system/cloudflared.service.d/wq2606-metrics.conf
   vfile "$HERE/supergateway-logrotate.conf" /etc/logrotate.d/supergateway
   vdone
@@ -49,7 +61,12 @@ install -D -m 0644 "$HERE/cloudflared-metrics.conf" /etc/systemd/system/cloudfla
 install -D -m 0644 "$HERE/supergateway-logrotate.conf" /etc/logrotate.d/supergateway
 
 systemctl daemon-reload
-systemctl enable --now mcp-gateway-watchdog.timer
+if [ "$WATCHDOG_ON" = 1 ]; then
+  systemctl enable --now mcp-gateway-watchdog.timer
+else
+  # wq#5264: intended-off; installing files must not undo the 2026-10-08 subtraction.
+  echo "mcp-gateway-watchdog units installed; timer left as-is (intended-off, WATCHDOG_ON=0)"
+fi
 
 # Quiet-window guard before bouncing cloudflared, same rationale as wq#829/wq#1698:
 # a mid-request restart knocks over whatever tunnel connections are in flight.
@@ -71,5 +88,5 @@ hc=$(curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:20241/ready ||
 echo "cloudflared --metrics post-restart /ready=$hc"
 [ "$hc" = 200 ] || echo "WARNING: /ready not 200 yet -- give it a few seconds, or check 'systemctl status cloudflared'"
 
-echo "APPLIED. mcp-gateway-watchdog.timer active (1 min). Gateway unit=${GATEWAY_UNIT} port=${GATEWAY_PORT}."
+echo "APPLIED (WATCHDOG_ON=$WATCHDOG_ON; timer enabled only when 1). Gateway unit=${GATEWAY_UNIT} port=${GATEWAY_PORT}."
 echo "mcp-pressure-guard.timer is untouched and keeps running (memory branch)."
