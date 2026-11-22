@@ -17,11 +17,14 @@ if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vunit_file "$SRC/primary-tree-guard.service" /etc/systemd/system/primary-tree-guard.service
   vunit_file "$SRC/primary-tree-guard.timer" /etc/systemd/system/primary-tree-guard.timer
-  venabled primary-tree-guard.timer
-  vactive primary-tree-guard.timer
-  # wq#4910: no vtimer_scheduled for primary-tree-guard.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5276: no venabled/vactive/vtimer_scheduled for primary-tree-guard.timer:
+  # intended-off, disabled by the 2026-10-08 subtraction
+  # (scratch/subtraction/timers-disable-list.txt:66; phase2-results.txt:66 confirms
+  # inactive/disabled). Asserting it enabled+active made --verify fail forever and filed
+  # an ops-root-apply telling the reader to run this script as root, which runs
+  # `systemctl enable --now` and undoes the subtraction. The unit files are still checked
+  # above. Re-enabling is a decision, not a heal; whoever makes it adds
+  # venabled/vactive/vtimer_scheduled back here.
   vdone
 fi
 

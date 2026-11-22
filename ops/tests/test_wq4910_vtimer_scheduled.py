@@ -167,7 +167,10 @@ class EveryTimerBundleDecided(unittest.TestCase):
                 noted = OFF_NOTE.format(unit=unit) in text
                 if not (scheduled or noted) or (scheduled and noted):
                     undecided.append(f"{os.path.relpath(path, REPO)}: {unit}")
-        self.assertGreater(checked, 40)
+        # Sanity floor (the glob/regex still finds the bundles), not a count to defend:
+        # the wq#525x/wq#5276 intended-off fixes drop vactive on disabled timers, so the
+        # count shrinks by one per fix. 40 at wq#5276 time; keep the floor well below.
+        self.assertGreater(checked, 25)
         self.assertEqual(undecided, [], "timer bundles with no intended-on/off decision")
 
     def test_off_notes_cite_a_subtraction_record(self):

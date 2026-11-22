@@ -29,5 +29,15 @@ Three walls, one per layer:
    seen dirty with no record is dated from its oldest modified file's mtime. Clear
    it by landing the edits via lumen-pr, or untracking + `.gitignore`-ing data files.
 
+## Timer is intended-off (wq#5276)
+
+The 2026-10-08 subtraction disabled `primary-tree-guard.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt`, line 66; confirmed
+`inactive/disabled` in `phase2-results.txt`, line 66). So `install.sh --verify` checks
+the two unit files, not that the timer is enabled or active. Do not run `install.sh` as
+root to "fix" the timer: it runs `systemctl enable --now` and undoes the subtraction.
+Re-enabling the timer is a decision. If someone makes it, they put
+`venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
+
 Install (root, via `lumen-run --root`): `./install.sh`
 Manual check: `python3 /home/lumen/foreman/harness/primary_tree_guard.py status`
