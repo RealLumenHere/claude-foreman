@@ -1,6 +1,8 @@
 # wq#3349 sentinel-watch
 
 `/home/lumen/bin/sentinel-watch`, run 4x daily by `lumen-sentinel-audit.timer` (01/07/13/19:17 UTC).
+That timer is intended-off since the 2026-10-08 subtraction (wq#5274): `SENTINEL_AUDIT_ON=0` in install.sh keeps
+install from enabling it and --verify from demanding it. Re-enabling is a decision: flip the flag to 1.
 Read-only sweep; each finding becomes one wq ticket (`[sentinel] <class>/<subject>:`), deduped against every
 non-closed ticket and carrying `--liveness 'sentinel-watch --check <key>'` so it closes when the condition clears.
 Frank is paged (ntfy lumen-alerts) only for P0/P1 findings that are human-only (key mint, wq/sentinel blind)
