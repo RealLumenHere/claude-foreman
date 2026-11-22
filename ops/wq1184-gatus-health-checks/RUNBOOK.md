@@ -20,8 +20,13 @@ Idempotent. What it does (see `install.sh` for the exact commands):
 4. Installs all 4 new systemd units plus the updated
    `lumen-foreman-{dispatch,selfheal,health}.service` (stamp hook added),
    then `daemon-reload`.
-5. Enables + starts the ntfy relay and the cron dead-man timer immediately
-   — both are safe with zero manual steps (see README.md's "why" section).
+5. Enables + starts the ntfy relay immediately (safe with zero manual steps,
+   see README.md's "why" section). The cron dead-man timer is installed but
+   left **disabled**: the 2026-10-08 subtraction turned it off on purpose
+   (`/home/lumen/scratch/subtraction/timers-disable-list.txt:78`), so
+   `--verify` no longer asserts it enabled/active and a re-run does not undo
+   that (wq#5250). To turn it back on, run with `LUMEN_CRON_DEADMAN_ENABLE=1`
+   and restore `venabled`/`vactive`/`vtimer_scheduled` for it in `--verify`.
 6. Leaves `lumen-gatus.service` installed but **not enabled** — see below.
 
 ## Enabling Gatus itself

@@ -11,9 +11,10 @@
 # probing LITELLM's authenticated /health endpoint immediately, and
 # LITELLM_MASTER_KEY has no safe default, so auto-enabling would false-page
 # on first boot. Enable it by hand after setting the key (see RUNBOOK.md).
-# The ntfy relay and cron dead-man ARE enabled here: neither can produce a
-# false alert on install (the relay is inert until Gatus calls it; the
-# dead-man only alerts once a stale stamp exists, and none do yet).
+# The ntfy relay IS enabled here (inert until Gatus calls it). The cron
+# dead-man timer is installed but left disabled unless
+# LUMEN_CRON_DEADMAN_ENABLE=1: the 2026-10-08 subtraction turned it off on
+# purpose (wq#5250).
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -45,11 +46,14 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-cron-deadman.timer" \
              /etc/systemd/system/lumen-cron-deadman.timer
   venabled   lumen-gatus-ntfy-relay.service
-  venabled   lumen-cron-deadman.timer
-  vactive    lumen-cron-deadman.timer
-  # wq#4910: no vtimer_scheduled for lumen-cron-deadman.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5250: no venabled/vactive/vtimer_scheduled for lumen-cron-deadman.timer. It is
+  # intended-off: the 2026-10-08 subtraction disabled it on purpose
+  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:78, REPORT.md:67
+  # "watchers-of-watchers"). Asserting enabled+active made --verify fail permanently, and
+  # the ops-root-apply it filed told the reader to run this script as root, which (before
+  # wq#5250) ran `systemctl enable --now` and undid the subtraction. The unit files are
+  # still checked above. Re-enabling it is a decision, not a heal; whoever makes it sets
+  # LUMEN_CRON_DEADMAN_ENABLE=1 below and adds venabled/vactive/vtimer_scheduled back here.
   [ -e "$SECRETS_ENV" ] || _vmiss "absent: $SECRETS_ENV"
   vdone
 fi
@@ -91,9 +95,16 @@ done
 
 systemctl daemon-reload
 
-echo "== enabling relay + dead-man (no false-alert risk on install) =="
+echo "== enabling relay (no false-alert risk on install) =="
 systemctl enable --now lumen-gatus-ntfy-relay.service
-systemctl enable --now lumen-cron-deadman.timer
+# wq#5250: the cron dead-man timer is intended-off since the 2026-10-08 subtraction
+# (see the --verify block). A re-run of this script must not silently re-enable it;
+# opt in explicitly with LUMEN_CRON_DEADMAN_ENABLE=1.
+if [ "${LUMEN_CRON_DEADMAN_ENABLE:-0}" = 1 ]; then
+  systemctl enable --now lumen-cron-deadman.timer
+else
+  echo "   lumen-cron-deadman.timer installed, left disabled (intended-off, wq#5250)"
+fi
 
 cat <<'EOF'
 
