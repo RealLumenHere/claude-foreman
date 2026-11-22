@@ -89,6 +89,17 @@ prefs_block.last` does not exist yet either, so the FIRST real timer fire will
 correctly treat the whole block as drift and open the initial migration ticket
 — which is the ticket's own intent (the hand copy is stale today).
 
+## Timer is intended-off (wq#5256)
+
+The timer was installed later (unit files in `/etc/systemd/system` are dated
+2026-09-20), then the 2026-10-08 subtraction disabled it on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt`, line 59). So
+`install.sh --verify` checks only the module and the two unit files. It does
+not check that the timer is enabled or active. Do not run `install.sh` as root
+to "fix" the timer: step 3 runs `systemctl enable --now` and undoes the
+subtraction. Re-enabling the timer is a decision. If someone makes it, they put
+`venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
+
 ## Verify
 
     cd ops/wq1640-lumen-state-render-frank-side-hardware-q-a3 && python3 -m pytest -q test_prefs_block.py

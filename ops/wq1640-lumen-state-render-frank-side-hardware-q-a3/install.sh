@@ -20,11 +20,13 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/prefs-block-check.service
   vunit_file "$HERE/prefs-block-check.timer" \
              /etc/systemd/system/prefs-block-check.timer
-  venabled   prefs-block-check.timer
-  vactive    prefs-block-check.timer
-  # wq#4910: no vtimer_scheduled for prefs-block-check.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5256: no venabled/vactive/vtimer_scheduled for prefs-block-check.timer. It is
+  # intended-off: the 2026-10-08 subtraction disabled it on purpose
+  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:59). Asserting enabled+active
+  # made --verify fail permanently, and the ops-root-apply it filed told the reader to run
+  # this script as root, which runs `systemctl enable --now` and undoes the subtraction.
+  # The unit files are still checked above. Re-enabling the timer is a decision, not a
+  # heal; whoever makes it adds venabled/vactive/vtimer_scheduled back here.
   vdone
 fi
 
