@@ -105,9 +105,18 @@ ssh lumen@100.117.66.102 'bash /home/lumen/foreman/ops/wq2434-drift-plan/rollbac
 
 `install.sh` runs the tests, dry-runs against the live config, then installs; it
 backs up `dashboard_api.py` before patching and refuses to install a version that
-does not compile. Health is asserted in-script: timer active, dashboard active,
-a real generation run, `index.json` non-empty, and the route serving
-`available: true`.
+does not compile. Health is asserted in-script: timer active (only when
+`DRIFT_PLAN_ON=1`), dashboard active, a real generation run, `index.json`
+non-empty, and the route serving `available: true`.
+
+**Timer intended-off since 2026-10-08 (wq#5263).** The subtraction disabled
+`lumen-drift-plan.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt:56`). `install.sh`
+ships `DRIFT_PLAN_ON=0`: install copies files and unit files but does not
+enable/start the timer, and `--verify` checks the generator, unit files and
+dashboard patch but does not assert the timer live. Re-enabling is a decision,
+not a heal: flip `DRIFT_PLAN_ON=1`, then install and verify assert
+enabled+active+scheduled. Test: `ops/tests/test_wq5263_drift_plan_intended_off.py`.
 
 The dashboard patch is marker-guarded (`# --- wq#2434 drift plans ---`),
 idempotent, and inserted **above** the `if __name__ == "__main__":` block —
