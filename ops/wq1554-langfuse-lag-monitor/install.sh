@@ -21,11 +21,15 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/langfuse-lag-monitor.service
   vunit_file "$SRC/langfuse-lag-monitor.timer" \
              /etc/systemd/system/langfuse-lag-monitor.timer
-  venabled   langfuse-lag-monitor.timer
-  vactive    langfuse-lag-monitor.timer
-  # wq#4910: no vtimer_scheduled for langfuse-lag-monitor.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5254: no venabled/vactive/vtimer_scheduled for langfuse-lag-monitor.timer. It is
+  # intended-off: the 2026-10-08 subtraction disabled it on purpose
+  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:39), and Langfuse itself was
+  # retired 2026-10-14/15 (scratch/subtraction/langfuse-retirement.md), so there is nothing
+  # left to probe. Asserting enabled+active made --verify fail permanently, and the
+  # ops-root-apply it filed told the reader to run this script as root, which runs
+  # `systemctl enable --now` and undoes the subtraction. The unit files are still checked
+  # above. Re-enabling is a decision (Langfuse must come back first), not a heal; whoever
+  # makes it adds venabled/vactive/vtimer_scheduled back here.
   vdone
 fi
 

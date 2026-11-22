@@ -70,3 +70,16 @@ changing anything:
 ```
 /home/lumen/foreman/ops/wq1554-langfuse-lag-monitor/install.sh --verify
 ```
+
+## Timer is intended-off (wq#5254)
+
+The 2026-10-08 subtraction disabled the timer on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt`, line 39), and
+Langfuse itself was retired on 2026-10-14/15 (containers removed, see
+`/home/lumen/scratch/subtraction/langfuse-retirement.md`). There is no
+Langfuse left to probe, so a live timer would only page about its staleness.
+`install.sh --verify` therefore checks only the two unit files, not that the
+timer is enabled or active. Do not run `install.sh` as root to "fix" the
+timer: it runs `systemctl enable --now` and undoes the subtraction.
+Re-enabling it is a decision (it needs Langfuse back first). Whoever makes it
+puts `venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
