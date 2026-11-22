@@ -262,3 +262,51 @@ def test_path_rules(env):
     assert env.sdk._bash_spec_re("git *").match("git commit -m 'x'")
     assert not env.sdk._bash_spec_re("git *").match("gitx")
     assert env.sdk._bash_spec_re("npm test:*").match("npm test --watch")
+
+
+def test_resume_after_kill_mid_tool_closes_dangling_tool_use(env, capsys):
+    """wq#5220 live failure: the watchdog killed the session during a long Bash call, the
+    saved session ended in an unanswered tool_use, and the resume's API call was refused."""
+    sdk = env.sdk
+    s = sdk.Session("sdk-killed", "anthropic/claude-opus-5-5", str(env.work), "sys", [
+        {"role": "user", "content": [{"type": "text", "text": "do it"}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "tu1", "name": "Bash",
+                                           "input": {"command": "lumen-pr suite --wait 590"}}]}])
+    s.save()
+    rc, frames, seen, _ = run_agent(env, [msg([text("EXIT_SIGNAL: true")])], prompt="resume now",
+                                    extra=("--resume", "sdk-killed"), capsys=capsys)
+    assert rc == 0
+    sent = seen[0]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]   # roles alternate
+    last = sent[-1]["content"]
+    assert last[0]["type"] == "tool_result" and last[0]["tool_use_id"] == "tu1" and last[0]["is_error"]
+    assert "Interrupted" in last[0]["content"]
+    assert last[1]["type"] == "text" and last[1]["text"].startswith("resume now")
+
+
+def test_resume_after_tool_results_merges_prompt(env, capsys):
+    sdk = env.sdk
+    s = sdk.Session("sdk-mid", "anthropic/claude-opus-5-5", str(env.work), "sys", [
+        {"role": "user", "content": [{"type": "text", "text": "do it"}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "t9", "name": "Bash", "input": {"command": "echo a"}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t9", "content": "a"}]}])
+    s.save()
+    rc, frames, seen, _ = run_agent(env, [msg([text("ok")])], prompt="go on",
+                                    extra=("--resume", "sdk-mid"), capsys=capsys)
+    assert [m["role"] for m in seen[0]] == ["user", "assistant", "user"]
+    assert [b["type"] for b in seen[0][-1]["content"]] == ["tool_result", "text"]
+
+
+def test_long_bash_emits_keepalive_frames(env, capsys, monkeypatch):
+    monkeypatch.setattr(env.sdk, "KEEPALIVE_S", 0.2)
+    rc, frames, _, _ = run_agent(env, [
+        msg([tool("Bash", {"command": "echo start; python3 -c 'import time; time.sleep(1)'; echo end"}, "k1")],
+            "tool_use"),
+        msg([text("done")]),
+    ], settings={"permissions": {"allow": ["Bash(echo *)", "Bash(python3 *)"]}}, capsys=capsys)
+    kinds = [(f["type"], (f.get("event") or {}).get("reason")) for f in frames]
+    i_asst = kinds.index(("assistant", None))
+    i_user = kinds.index(("user", None))
+    ticks = [k for k in kinds[i_asst:i_user] if k == ("stream_event", "tool_running")]
+    assert len(ticks) >= 2, kinds
+    assert frames[i_user]["message"]["content"][0]["content"] == "start\nend"

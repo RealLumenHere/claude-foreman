@@ -460,6 +460,7 @@ class ToolBox:
         self.env = env
         self.read_files = set()
         self.current = None  # running Bash Popen, killed with the session (own pgid)
+        self.on_tick = None  # called every KEEPALIVE_S while a tool process runs
         self.out_cap = int(env.get("BASH_MAX_OUTPUT_LENGTH") or 30000)
 
     def run(self, name, inp):
@@ -490,21 +491,34 @@ class ToolBox:
                              start_new_session=True)
         self.current = p
         timed_out = False
+        chunks = []
+        reader = threading.Thread(target=lambda: chunks.append(p.stdout.read()), daemon=True)
+        reader.start()
+        deadline = time.time() + t_ms / 1000
         try:
-            out, _ = p.communicate(timeout=t_ms / 1000)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-                out, _ = p.communicate(timeout=5)
-            except Exception:
+            while True:
                 try:
-                    os.killpg(p.pid, signal.SIGKILL)
-                except Exception:
-                    pass
-                out, _ = p.communicate()
+                    p.wait(timeout=max(0.1, min(KEEPALIVE_S, deadline - time.time())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.time() >= deadline:
+                        timed_out = True
+                        for sig in (signal.SIGTERM, signal.SIGKILL):
+                            try:
+                                os.killpg(p.pid, sig)
+                                p.wait(timeout=5)
+                                break
+                            except Exception:
+                                pass
+                        break
+                    # a live, bounded tool process is not a stalled session: tell fworker's
+                    # frame-gap watchdog so (Claude Code also reports during long tools)
+                    if self.on_tick:
+                        self.on_tick()
         finally:
             self.current = None if timed_out or p.poll() is not None else self.current
+        reader.join(timeout=10)
+        out = chunks[0] if chunks else b""
         try:
             with open(pwd_file) as f:
                 nc = f.read().strip()
@@ -747,6 +761,24 @@ def _mark_cache(messages):
                 break
 
 
+def repair_dangling(messages):
+    """A session killed mid-tool (watchdog, SIGTERM) is saved ending in an assistant turn whose
+    tool_use blocks never got a tool_result; the API refuses to continue from that shape.
+    Close each with an error result so a resume can carry on. Returns how many were closed."""
+    if not messages or messages[-1].get("role") != "assistant":
+        return 0
+    c = messages[-1].get("content")
+    uses = [b for b in (c if isinstance(c, list) else []) if isinstance(b, dict) and b.get("type") == "tool_use"]
+    if not uses:
+        return 0
+    messages.append({"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": b["id"], "is_error": True,
+         "content": ("Interrupted: the session was stopped while this tool call was running; "
+                     "no result was captured. Re-check its effect before relying on it.")}
+        for b in uses]})
+    return len(uses)
+
+
 def compact(messages, keep=KEEP_RECENT_TOOL_RESULTS):
     """Elide the bodies of older tool results (oldest first), keeping the last `keep`
     intact. Message structure (tool_use/tool_result pairing) is preserved."""
@@ -801,6 +833,9 @@ class Agent:
         self.perms = Permissions(settings, [self.cwd] + self.add_dirs, args.permission_mode)
         self.hooks = Hooks(settings, self.tool_env, self.cwd)
         self.tools = ToolBox(self.cwd, self.tool_env)
+        self._sid = None
+        self.tools.on_tick = lambda: emit({"type": "stream_event", "session_id": self._sid,
+                                           "event": {"type": "keepalive", "reason": "tool_running"}})
         self.usage_tot = {"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
                           "cache_creation_input_tokens": 0}
         self.cost = 0.0
@@ -887,6 +922,11 @@ class Agent:
             session = Session(sid, self.model, self.cwd,
                               build_system(self.cwd, self.add_dirs, self.model, out_cap))
             source = "startup"
+        self._sid = session.sid
+        if resume:
+            n = repair_dangling(session.messages)
+            if n:
+                errlog(f"resume: closed {n} interrupted tool call(s) left by the previous run")
         base = {"session_id": session.sid, "transcript_path": session.transcript, "cwd": self.cwd}
         ctx = self.hooks.context("SessionStart", {**base, "hook_event_name": "SessionStart",
                                                   "source": source})
@@ -896,9 +936,18 @@ class Agent:
               "runtime": "sdk", "effort": self.effort})
         if prompt:
             text = prompt if not ctx else f"{prompt}\n\n<session-start-hook>\n{ctx}\n</session-start-hook>"
-            um = {"role": "user", "content": [{"type": "text", "text": text}]}
-            session.messages.append(um)
-            session.log("user", um)
+            block = {"type": "text", "text": text}
+            last = session.messages[-1] if session.messages else None
+            if last and last.get("role") == "user":
+                # resume after tool results (or a repair): same user turn, roles must alternate
+                if isinstance(last.get("content"), str):
+                    last["content"] = [{"type": "text", "text": last["content"]}]
+                last["content"].append(block)
+                session.log("user", {"role": "user", "content": [block]})
+            else:
+                um = {"role": "user", "content": [block]}
+                session.messages.append(um)
+                session.log("user", um)
         elif not session.messages:
             self.result(session, "error_during_execution", "no prompt and nothing to resume", True)
             return 1
