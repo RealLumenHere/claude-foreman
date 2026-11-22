@@ -12,11 +12,14 @@ if [ "${1:-}" = --verify ]; then
   vfile      "$SRC1776/check_chunk_doc_invariants.py"    /home/lumen/bin/check-pgvector-invariants
   vunit_file "$HERE/lumen-chunk-doc-invariants.service"  /etc/systemd/system/lumen-chunk-doc-invariants.service
   vunit_file "$HERE/lumen-chunk-doc-invariants.timer"    /etc/systemd/system/lumen-chunk-doc-invariants.timer
-  venabled   lumen-chunk-doc-invariants.timer
-  vactive    lumen-chunk-doc-invariants.timer
-  # wq#4910: no vtimer_scheduled for lumen-chunk-doc-invariants.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5260: no venabled/vactive/vtimer_scheduled for lumen-chunk-doc-invariants.timer: it
+  # is intended-off, disabled on purpose by the 2026-10-08 subtraction
+  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:28). wq#4910 dropped only the
+  # scheduled check, so --verify still demanded enabled+active, failed forever, and the
+  # ops-root-apply it filed told the reader to run this script as root, whose
+  # `enable --now` would have undone the subtraction. Re-enabling it is a decision, not a
+  # heal; whoever makes it restores the enable below and adds venabled/vactive/
+  # vtimer_scheduled here.
   vdone
 fi
 
@@ -26,9 +29,8 @@ install -m 0755 "$SRC1776/check_chunk_doc_invariants.py" /home/lumen/bin/check-p
 sudo install -m 0644 "$HERE/lumen-chunk-doc-invariants.service" /etc/systemd/system/lumen-chunk-doc-invariants.service
 sudo install -m 0644 "$HERE/lumen-chunk-doc-invariants.timer" /etc/systemd/system/lumen-chunk-doc-invariants.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now lumen-chunk-doc-invariants.timer
-systemctl is-active --quiet lumen-chunk-doc-invariants.timer
-systemctl list-timers lumen-chunk-doc-invariants.timer --no-pager --no-legend
+# wq#5260: intended-off (timers-disable-list.txt:28): unit files ship and are verified,
+# but the timer is neither enabled nor started here.
 
 # One live report (no --raise-aq: the timer owns state; this run persists nothing).
 /home/lumen/bin/check-pgvector-invariants
