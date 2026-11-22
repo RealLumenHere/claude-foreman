@@ -40,3 +40,14 @@ Install (root, via `lumen-run --root`):
 lumen-run start --root -- bash /home/lumen/foreman/ops/wq1294-session-handoff/install.sh
 ```
 Manual run: `systemctl start session-handoff.service`
+
+## Timer is intended-off (wq#5251)
+
+The 2026-10-08 subtraction disabled `session-handoff.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-phase2.txt`, line 54), and
+wq#1630 already re-renders the handoff region at boot via
+`claude_context.sh --core`. So `install.sh --verify` checks only the two unit
+files. It does not check that the timer is enabled or active. Do not run
+`install.sh` as root to "fix" the timer: it runs `systemctl enable --now` and
+undoes the subtraction. Re-enabling the timer is a decision. If someone makes
+it, they put `venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
