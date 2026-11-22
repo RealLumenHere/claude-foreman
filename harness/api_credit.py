@@ -261,7 +261,11 @@ def record(model, usage, *, ticket=None, session=None, attempt=None, request_id=
                 "cache_read_input_tokens": int(u.get("cache_read_input_tokens") or 0),
                 "cache_creation_input_tokens": int(u.get("cache_creation_input_tokens") or 0),
                 "cost_usd": round(c, 6), "ticket": ticket, "attempt": attempt,
-                "session": session, "request_id": request_id}) + "\n")
+                "session": session, "request_id": request_id,
+                # set only under pytest (repo conftest): lets the leak tripwire tell a
+                # test's spend from a production worker's
+                **({"test_run": os.environ["FOREMAN_API_CREDIT_TEST_RUN"]}
+                   if os.environ.get("FOREMAN_API_CREDIT_TEST_RUN") else {})}) + "\n")
         _write_state(st)
     for a in alerts:
         _ntfy("API credits %d%% used" % a,

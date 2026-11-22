@@ -134,3 +134,19 @@ def test_status_fails_closed_on_bad_config(ac):
     st = ac.status()
     assert st["available"] is False
     assert ac.choose_runtime({"title": "t"}, "claude-opus-5-5", None)[0] is None
+
+
+def test_ledger_lines_carry_the_pytest_marker_only_under_pytest(ac, monkeypatch):
+    """The repo conftest's leak tripwire keys on this marker, so a production SDK worker
+    writing the live ledger during a suite run never fails a test (PR #2694 false errors)."""
+    monkeypatch.setenv("FOREMAN_API_CREDIT_TEST_RUN", "pytest-1-2")
+    ac.record("anthropic/claude-opus-5-5", {"output_tokens": 1})
+    monkeypatch.delenv("FOREMAN_API_CREDIT_TEST_RUN")
+    ac.record("anthropic/claude-opus-5-5", {"output_tokens": 1})
+    with open(ac.LEDGER_PATH) as f:
+        lines = [json.loads(x) for x in f]
+    assert lines[0]["test_run"] == "pytest-1-2" and "test_run" not in lines[1]
+
+
+def test_conftest_marks_the_environment():
+    assert os.environ.get("FOREMAN_API_CREDIT_TEST_RUN", "").startswith("pytest-")

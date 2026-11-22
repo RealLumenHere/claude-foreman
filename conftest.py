@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import sys
+import time
 
 import pytest
 
@@ -48,6 +49,11 @@ def _isolate_recipe_store(monkeypatch, tmp_path):
         monkeypatch.setattr(rc, "STORE_PATH", str(tmp_path / "recipes.json"))
 
 
+# wq#5211: stamped into every ledger line a test-spawned process writes (api_credit.record),
+# so the tripwire below flags this run's leaks and never a production SDK worker's spend.
+_API_CREDIT_TEST_RUN = "pytest-%d-%d" % (os.getpid(), int(time.time() * 1000))
+
+
 def _live_size(path, _stat=os.stat):
     # bound at import: tests monkeypatch os.path.exists/getsize for their own fixtures
     try:
@@ -66,6 +72,7 @@ def _isolate_api_credit(monkeypatch, tmp_path):
     file means disabled. Tests that exercise the runtime write their own config."""
     d = tmp_path / "api-credit-isolated"
     monkeypatch.setenv("FOREMAN_API_CREDIT_DIR", str(d))
+    monkeypatch.setenv("FOREMAN_API_CREDIT_TEST_RUN", _API_CREDIT_TEST_RUN)
     ac = sys.modules.get("api_credit")
     if ac is not None:
         for name, leaf in (("STATE_DIR", ""), ("CONFIG_PATH", "config.json"),
@@ -75,10 +82,20 @@ def _isolate_api_credit(monkeypatch, tmp_path):
     live = "/home/lumen/foreman/api-credit/ledger.jsonl"
     before = _live_size(live)
     yield
-    after = _live_size(live)
-    if after > before:
-        pytest.fail(f"wq#5211: this test wrote the LIVE API-credit ledger ({live}, "
-                    f"{before}->{after} bytes): it spent real credit", pytrace=False)
+    if _live_size(live) <= before:
+        return
+    # the live ledger also grows from production SDK workers running alongside this suite;
+    # only a line carrying THIS run's marker is a leak
+    try:
+        with open(live, "rb") as f:
+            f.seek(before)
+            fresh = f.read().decode("utf-8", "replace")
+    except OSError:
+        return
+    marker = '"test_run": "%s"' % _API_CREDIT_TEST_RUN
+    if marker in fresh:
+        pytest.fail(f"wq#5211: this test wrote the LIVE API-credit ledger ({live}): a "
+                    f"test-spawned process spent real credit", pytrace=False)
 
 
 @pytest.fixture(autouse=True)
