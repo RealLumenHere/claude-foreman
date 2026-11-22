@@ -269,6 +269,15 @@ ops/wq1609-minerva-contradiction-scan/install.sh
 Runs the tests, installs the script and both units, enables the timer, then
 prints one live report.
 
+**The timer is intended-off (wq#5255).** The 2026-10-08 subtraction disabled
+`lumen-contradiction-scan.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt:25`). Do not run the full
+install as root to "fix" a verify failure: its `systemctl enable --now` undoes
+that decision. `install.sh --verify` checks the script and both unit files only;
+use `install.sh --script-only` to redeploy a scanner fix. Re-enabling the timer is
+a decision; whoever makes it restores venabled/vactive/vtimer_scheduled in
+`--verify`.
+
 **Deploy step 2 — remove the weekly duplicate.** `lumen_dream.py` still calls
 `stale_prose_scan()`/`superseded_ips()` on the Sunday run. Once the daily timer
 is up, delete that section from the dream pass (`lumen-dream.service` keeps
