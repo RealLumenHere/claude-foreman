@@ -445,6 +445,9 @@ routing:   # archetype -> primary -> downgrade path (effort first, then model). 
   # different model/effort call. The build ticket for option A (not this one) adds the
   # permission-profile/add_dirs sibling in harness/agents.yaml.
   verify-probe:         [sonnet-5-5@high, opus-5-5@high(on-contradiction)]
+  # wq#5145 (archetype 11): read-only source review, SARIF out. Security review is most of
+  # its intended use, so no fable rung (security_exclusion); Opus primary, Sonnet behind it.
+  review-readonly:      [opus-5-5@high,   sonnet-5-5@high]
   fire-response:        [opus-5-5@high,   opus-4-8@high]   # wq#5083: fleet infra tier; wq#717 AUTO-5: fleet-fires manual-approval; never local (LOCAL_ALLOWED_ARCHETYPES excludes it)
   orchestrator:         [opus-4-6@high]   # wq#5083 (Frank 2026-11-18): orchestrator sessions -> Opus 4.6, always
   decomposer:           [opus-5-5@medium, opus-5-5@high]  # wq#2515: the DECOMPOSE consumer's planning call

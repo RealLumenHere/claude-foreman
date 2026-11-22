@@ -185,7 +185,13 @@ _CITATION_RE = re.compile(r"^(?P<path>[^\s:]+):(?P<start>\d+)(?:-(?P<end>\d+))?$
 # a report-writing archetype has nothing to cite in `git diff` and must not be gated on
 # one. They still get command criteria if the ticket names commands.
 NON_DIFF_ARCHETYPES = {"verify-pass", "rca-investigation", "fire-response",
-                       "research", "research-synthesis", "documentation"}
+                       "research", "research-synthesis", "documentation",
+                       "review-readonly"}
+# wq#5145: archetypes whose worker has no Write and no Bash (permission_profiles.
+# REVIEW_READONLY_*), so it can neither write evidence.json nor run a replayed command.
+# They get NO pinned criteria: the harness itself validates the deliverable
+# (review_sarif.emit parses the findings block and writes the SARIF) before closing.
+NO_EVIDENCE_ARCHETYPES = {"review-readonly"}
 
 VALID_PROOF_TYPES = ("test", "citation")
 REPLAY_TIMEOUT_S = int(os.environ.get("FOREMAN_REPLAY_TIMEOUT_S", "900") or 900)
@@ -457,6 +463,11 @@ def derive(ticket, model_call=None):
     deterministic derivation stands.
     """
     criteria, derived_by, notes = [], "deterministic", []
+    if (ticket.get("archetype") or "").strip() in NO_EVIDENCE_ARCHETYPES:
+        return {"ticket": f"wq#{ticket.get('id', '?')}", "derived_by": "readonly-archetype",
+                "criteria": [],
+                "notes": ["read-only archetype: no Write/Bash, so no evidence.json; the "
+                          "harness validates the findings block and emits SARIF itself"]}
     if model_call is not None:
         try:
             raw = model_call(derivation_prompt(ticket))

@@ -90,6 +90,7 @@ import cf_hold  # wq#2843: the CF-rotation hold shape, shared with foreman_dispa
 sys.path.insert(0, "/home/lumen/bin")
 import fleet_exec_policy
 import permission_profiles
+import review_sarif  # wq#5145: review-readonly findings -> SARIF in the run dir
 import primary_tree_guard
 from langfuse_client import emit_trace_with_span
 
@@ -2871,6 +2872,33 @@ ARCHETYPE_EXTRA_ALLOW = {
 }
 
 
+def close_review_readonly(ticket_id, result_text, repo=None):
+    """wq#5145: the harness half of a review-readonly ticket. The worker has no Bash and
+    no Write, so its final message's ```review-findings block is its whole deliverable:
+    write review-findings.json + review.sarif into the run dir, then close the ticket
+    citing the SARIF path. Returns the review_sarif.emit() summary, or None when the
+    block is missing/malformed (logged; the ticket stays open and the ordinary
+    FALSE_COMPLETE path sends it to rework) or the close itself was refused."""
+    try:
+        out = review_sarif.emit(result_text, run_dir(ticket_id), ticket_id=ticket_id,
+                                repo=repo)
+    except review_sarif.FindingsError as e:
+        log(f"wq#{ticket_id}: review-readonly findings unusable ({e}) — ticket left open")
+        return None
+    levels = ", ".join(f"{k}={v}" for k, v in sorted(out["levels"].items())) or "clean"
+    log(f"wq#{ticket_id}: review-readonly SARIF -> {out['sarif']} "
+        f"({out['count']} findings: {levels})")
+    notes = (f"review-readonly: {out['count']} findings ({levels}). "
+             f"SARIF {out['sarif']} ; JSON {out['json']}")
+    why = "review-readonly SARIF lives in the harness run dir and is never committed"
+    try:
+        wq_done(ticket_id, notes, no_artifact_reason=why, unlanded_reason=why)
+    except RuntimeError as e:
+        log(f"wq#{ticket_id}: review-readonly close refused: {e}")
+        return None
+    return out
+
+
 def resolve_worker_settings(repo, ticket_id, archetype=None):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
     profile (permission-profiles/repos.d/<repo>.json) into the ticket's run_dir, unioned
@@ -2882,6 +2910,13 @@ def resolve_worker_settings(repo, ticket_id, archetype=None):
     """
     if archetype == "verify-probe":
         return VERIFY_PROBE_SETTINGS_FILE
+    if archetype == permission_profiles.REVIEW_READONLY_ARCHETYPE:
+        # wq#5145: Read/Grep/Glob only, no Bash/Edit/Write — replaces the per-repo
+        # union outright, same reasoning as verify-probe (a lane grant, not a toolchain).
+        settings_file, digest = permission_profiles.resolve_review_readonly_settings_file(
+            SETTINGS_FILE, run_dir(ticket_id))
+        log(f"wq#{ticket_id}: rendered review-readonly pack {digest[:12]} -> {settings_file}")
+        return settings_file
     settings_file, digest = permission_profiles.resolve_settings_file(
         repo, SETTINGS_FILE, run_dir(ticket_id),
         archetype_allow=ARCHETYPE_EXTRA_ALLOW.get(archetype))
@@ -4798,7 +4833,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # EXIT_SIGNAL contract (worker.md); other prompt families are recorded, not gated.
     exit_gate_enforced = (exit_gate.mode() == "enforce" and not aider_runtime
                           and exit_gate.PROTOCOL_MARKER in (prompt or ""))
-    if exit_gate_enforced:
+    # wq#5145: a review-readonly worker cannot close its own ticket (no Bash), so the
+    # in-session stop-gate half could only ever see one indicator and would burn its
+    # MAX_BLOCKS nudges on every review. The post-session half below still gates the
+    # exit, after close_review_readonly() has closed the ticket from the SARIF.
+    if exit_gate_enforced and archetype != review_sarif.ARCHETYPE:
         env["FOREMAN_EXIT_GATE_PROTOCOL"] = "1"
     settings_file = resolve_worker_settings(args.repo, ticket_id, archetype=archetype)
     # wq#4765 (§2.3 step 6, §2.7 F9): a grant-approved resume spawns with --resume <sid>
@@ -4981,6 +5020,16 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # orchestrator deciding "raise MemoryMax or shrink" (§C6) doesn't have to go
     # run journalctl by hand. Best-effort; never raises, never changes classification.
     oom_journal = oom_journal_evidence(t0, pid=child_pid) if classification == OOM else None
+
+    # wq#5145: a review-readonly worker cannot `wq done` — the harness closes it here
+    # from the findings block, BEFORE the sentinel/§C10/exit gates below read the ticket
+    # status, so a usable SARIF counts as ticket_done and an unusable one falls through
+    # to FALSE_COMPLETE. A worker that printed BLOCKED/CLAIM_ERROR is left alone.
+    if (archetype == review_sarif.ARCHETYPE
+            and classification in (SUCCESS, DEGRADED_SUCCESS)
+            and parse_worker_sentinel(state.result_text) not in (BLOCK_SENTINEL,
+                                                                  CLAIM_ERROR_SENTINEL)):
+        close_review_readonly(ticket_id, state.result_text, repo=args.repo)
 
     # wq#749: a worker that did exactly what worker.md tells it to do on an
     # unworkable ticket — `wq block`, print BLOCKED, exit 0 — produces an ordinary

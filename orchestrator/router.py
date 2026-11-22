@@ -238,6 +238,8 @@ ARCHETYPE_NUMBERS = {
     # wq#717 claimed 9 for fire-response. 10 is the first free slot; the design's intent
     # (a verify-pass sibling with reach, not mutation, grants) is unaffected by the number.
     10: "verify-probe",
+    # wq#5145 (wq#5041 gap 5): read-only source review — Read/Grep/Glob, SARIF out.
+    11: "review-readonly",
 }
 ARCHETYPES = list(ARCHETYPE_NUMBERS.values())
 # routing rows that are not ticket archetypes: the foreman's own judgment sessions.

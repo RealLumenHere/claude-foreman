@@ -98,6 +98,36 @@ archetypes:
       - /home/lumen/logs
       - /home/lumen/minerva
 
+  review-readonly:
+    # wq#5145 (wq#5041 gap 5, CodeAF's sec/review subharnesses; router archetype 11):
+    # read source, report findings, never build/test/exploit/post/fix — each of those
+    # is a separate ticket. fworker.resolve_worker_settings() swaps the per-repo union
+    # for permission_profiles.render_review_readonly() (Read/Grep/Glob, Bash/Edit/Write
+    # denied); fworker.close_review_readonly() turns the findings block into
+    # review.sarif in the run dir and closes the ticket. Tighter than verify-probe:
+    # reading is all it does. Candidate consumers: mcp-guard, code audits.
+    primary_tuple: opus-5-5@high
+    max_turns: 300
+    wall_clock_timeout_s: 2400
+    permission_profile_note: "permission_profiles.render_review_readonly (Read/Grep/Glob only, wq#5145)"
+    prompt_addendum: |
+      REVIEW-READONLY ARCHETYPE (wq#5145). This overrides every instruction above about
+      Bash, lumen-pr, commits, evidence.json and `wq done`/`wq block`. Your tools are
+      Read, Grep and Glob. Bash, Edit, Write, web and subagent tools are denied; do not
+      try them, and do not build, test, run, post or fix anything. Read the code the
+      ticket names and report what you find. Findings are claims about code: cite the
+      exact path and line you read, and leave out anything you did not read yourself.
+      The harness closes the ticket from your findings. End your final message with ONE
+      fenced block tagged review-findings holding a JSON object:
+        {"summary": "<one paragraph: scope read, overall verdict>",
+         "findings": [{"rule_id": "<short-kebab-id>", "level": "error|warning|note",
+                       "message": "<what is wrong and why>", "path": "<repo-relative path>",
+                       "start_line": <int>, "end_line": <int>}]}
+      Use "findings": [] for a clean review. The harness writes it to review.sarif
+      (SARIF 2.1.0) and review-findings.json in the run dir and runs `wq done` for you.
+      After the block, end with the two exit lines `EXIT_SIGNAL: true` and
+      `TICKET_CLOSED`. A missing or malformed block leaves the ticket open for rework.
+
   research-synthesis:
     primary_tuple: opus-5-5@medium   # Opus 5.5 adoption (f6f13598)
     max_turns: 600

@@ -112,6 +112,61 @@ def render_permissions(repo_path, base_settings, archetype_allow=None):
     return merged
 
 
+# wq#5145 (wq#5041 gap 5, CodeAF's sec/review subharnesses): a review worker reads
+# source and reports findings. It never builds, tests, runs an exploit, posts a comment
+# or fixes anything; each of those is a separate request on a separate ticket. Like
+# verify-probe this is a LANE grant, not a repo toolchain, so it replaces the per-repo
+# repos.d/ union outright instead of being unioned into it: a repo's python/node
+# fragments are Bash rules, and a review worker gets no Bash at all.
+REVIEW_READONLY_ARCHETYPE = "review-readonly"
+REVIEW_READONLY_ALLOW = ["Read", "Grep", "Glob"]
+# Explicit denies on top of the empty-Bash allowlist. defaultMode "acceptEdits" (the
+# worker-settings.json default) would otherwise auto-approve Edit/Write inside cwd,
+# and a deny rule outranks both an allow rule and the mode.
+REVIEW_READONLY_DENY = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit",
+                        "WebFetch", "WebSearch", "Task", "Agent"]  # subagent: both names (fworker._BG_BY_DEFAULT_TOOLS)
+
+
+def render_review_readonly(base_settings):
+    """The review-readonly permission pack: base_settings' hooks (guard.sh, stop gate)
+    and defaultMode pass through unchanged; permissions.allow is REPLACED by
+    REVIEW_READONLY_ALLOW and permissions.deny by base deny + REVIEW_READONLY_DENY. A
+    fresh dict every call; base_settings is never mutated."""
+    merged = json.loads(json.dumps(base_settings))
+    perms = merged.setdefault("permissions", {})
+    deny = []
+    _dedup_extend(deny, set(), list(perms.get("deny", [])) + REVIEW_READONLY_DENY)
+    perms["allow"] = list(REVIEW_READONLY_ALLOW)
+    perms["deny"] = deny
+    return merged
+
+
+def is_review_readonly(settings_dict):
+    """True when a rendered pack grants no tool outside Read/Grep/Glob and denies
+    every write/exec tool in REVIEW_READONLY_DENY. The check fworker's tests and any
+    consumer (mcp-guard, code audits) can run on a pack before trusting it."""
+    perms = (settings_dict or {}).get("permissions") or {}
+    allow = perms.get("allow") or []
+    deny = set(perms.get("deny") or [])
+    return (all(rule in REVIEW_READONLY_ALLOW for rule in allow)
+            and all(rule in deny for rule in REVIEW_READONLY_DENY))
+
+
+def resolve_review_readonly_settings_file(static_settings_file, out_dir):
+    """Render the review-readonly pack under out_dir (content-addressed, same scheme as
+    resolve_settings_file). Returns (settings_path, render_hash)."""
+    merged = render_review_readonly(_load_json(static_settings_file))
+    digest = render_hash(merged)
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, f"settings-{REVIEW_READONLY_ARCHETYPE}-{digest[:12]}.json")
+    if not os.path.isfile(out_path):
+        tmp = out_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(merged, f, indent=2)
+        os.replace(tmp, out_path)
+    return out_path, digest
+
+
 def render_hash(settings_dict):
     blob = json.dumps(settings_dict, sort_keys=True).encode()
     return hashlib.sha256(blob).hexdigest()

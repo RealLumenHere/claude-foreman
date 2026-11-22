@@ -1,33 +1,39 @@
 {
   "archetypes": {
     "fire-response": {
-      "spec_hash": "88a0d5e03946acd0d05e4780ab33fe3ea42f155bc4ef65de115594e5abeefc58"
+      "spec_hash": "e878405d4c95a537d7dae3dedeb68d595dd792adfd91ee17393fbb13b2c32fae"
     },
     "long-horizon-campaign": {
-      "spec_hash": "2ba7104d86401568f6348824f6d6bad3183ee57264376538575cb5418cde6462"
+      "spec_hash": "be33738a21366fabaa6372b34cd487e1df61862f7f37b21a0121da3a1a2c4640"
     },
     "mechanical-edit": {
-      "spec_hash": "26d86ab7ab1c1633e2433f2f2f2426d0c83721d691eb865470d82095dd0e8e6c"
+      "spec_hash": "d418f488b3ef5b6062933f78284b1b8e5badf54c33d0d47bda183c46500cfacd"
     },
     "novel-design": {
-      "spec_hash": "bba0e67edcd9b6de8ceaf5c94b13987f9a470cfec2382965faee8a1c391f3fe0"
+      "spec_hash": "83c1692ecc39f0d28956500b3b6130f1fff00909c4933f878877aad01d24e07f"
     },
     "probe-build": {
-      "spec_hash": "63b1cbf640b9ce7edd6cb0e34617f96d7f8f4202e0fef1a024bd10d055c94eaa"
+      "spec_hash": "03850c9dae49410a31817d58a0f9416d0f6eed5d358b77a689235fcd37f7855b"
     },
     "rca-investigation": {
       "spec_hash": "1cc05d67873a17bab6c2cd500f6d9fe0c430daf549d8122dfd234dfdea3f43c8"
     },
     "research-synthesis": {
-      "spec_hash": "7283c9fb9f2e2ce52487954ae4b5d0b64a4d2ef6d0ec5be159875505dd7a9775"
+      "spec_hash": "4c569cde0e91df84e7fcdd80eab8df824833e0869a74451b43af499f0ca6639e"
+    },
+    "review-readonly": {
+      "spec_hash": "ecb39fc46c25ebc02c007dcdf8fb63d371bb8b248e627624dfec6abf1a8f3850"
     },
     "standard-engineering": {
-      "spec_hash": "a43a259d0a743d77e63cc47a168e1edb3f314e360d6f2e0a3a68f126bd248045"
+      "spec_hash": "5cc9684176624e827e0516bcbb3128e31be06d7dfbf4df68b0b44247686f23be"
     },
     "verify-pass": {
-      "spec_hash": "a43a259d0a743d77e63cc47a168e1edb3f314e360d6f2e0a3a68f126bd248045"
+      "spec_hash": "ff8815fc4c3de4a16fd16bbba4831ca3a1ec861e0ba606fc9b7bd2afbc044805"
+    },
+    "verify-probe": {
+      "spec_hash": "028c7788276beda5230e1c7320eb29ce9be112eecec179d4778ac6703f6cc095"
     }
   },
-  "overall_hash": "72fa2de8b03d04828990bbc490cdcb2a09cc4d37c4dcc75002fe2b94bde99def",
+  "overall_hash": "1260790149149b9a9aefac0f9552f125346c45eebb873424c4df23a16b08f8fb",
   "source": "agents.yaml"
 }
