@@ -51,6 +51,20 @@ def run_verify(bundle_text=None):
         return out.stdout + out.stderr
 
 
+def verify_block(text):
+    return text.split('= --verify ]; then', 1)[1].split("\nfi\n", 1)[0]
+
+
+def ungated_timer_asserts(text):
+    """Timer-state asserts in the --verify block outside the `if [ "$INTENDED_ON" = 1 ]`
+    branch. wq#5336: wq#5325 legitimately gates them there (covered by test_wq5325);
+    only an unconditional one is forbidden."""
+    block = re.sub(r'^\s*if \[ "\$INTENDED_ON" = 1 \]; then\n.*?^\s*fi\n', "",
+                   verify_block(text), flags=re.M | re.S)
+    return [fn for fn in ("venabled", "vactive", "vtimer_scheduled")
+            if re.search(r"^\s*" + fn + r"\s+" + re.escape(UNIT), block, re.M)]
+
+
 class IntendedOffTimerVerifyTest(unittest.TestCase):
     def test_disabled_inactive_timer_raises_no_miss(self):
         out = run_verify()
@@ -69,11 +83,18 @@ class IntendedOffTimerVerifyTest(unittest.TestCase):
 
     def test_verify_block_has_no_timer_state_asserts(self):
         text = open(os.path.join(OPS, BUNDLE, "install.sh")).read()
-        block = text.split('= --verify ]; then', 1)[1].split("\nfi\n", 1)[0]
-        for fn in ("venabled", "vactive", "vtimer_scheduled"):
-            self.assertIsNone(re.search(r"^\s*" + fn + r"\s+" + re.escape(UNIT), block, re.M), fn)
+        self.assertEqual(ungated_timer_asserts(text), [])
+        block = verify_block(text)
         self.assertIn("timers-disable-list.txt:4", block)
         self.assertRegex(block, r"vunit_file\s+\"\$SRC/" + re.escape(UNIT) + '"')
+
+    def test_static_check_flags_an_ungated_assert(self):
+        # Falsifiability (wq#5336): the INTENDED_ON=1 exclusion must not blind the check to
+        # an assert re-added outside the gate.
+        text = open(os.path.join(OPS, BUNDLE, "install.sh")).read()
+        old = text.replace("  vdone\n", f"  venabled {UNIT}\n  vdone\n", 1)
+        self.assertNotEqual(old, text)
+        self.assertEqual(ungated_timer_asserts(old), ["venabled"])
 
 
 if __name__ == "__main__":
