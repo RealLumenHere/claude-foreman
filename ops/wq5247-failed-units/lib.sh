@@ -65,16 +65,47 @@ audit_disable_rule() {
 # the 2026-08-08 Thor failure of this same unit (agents/work-queue/reports/
 # fleet_update_20260808.md:55-58; fixed by backup + `grub-editenv create`).
 
-# grubenv_state FILE — ok | absent | bad-header | bad-size:<n>
+# grubenv_state FILE [READER...] — ok | absent | unreadable | bad-header | bad-size:<n>
 # bad-header is the corruption grub-editenv rejects; bad-size alone is reported but
-# not treated as corruption (grub only checks the signature).
+# not treated as corruption (grub only checks the signature). READER (e.g. `sudo -n`)
+# prefixes every read so a caller can look as root. wq#5337: a file that exists but
+# cannot be read is `unreadable`, never `bad-header` — the first bundle read as the
+# unescalated ssh user and a permission failure looked like a bad signature, which
+# would have backed up and recreated a healthy env.
 grubenv_state() {
-  local f="$1" n
-  [ -e "$f" ] || { echo absent; return; }
-  if [ "$(head -c 24 "$f")" != "# GRUB Environment Block" ]; then echo bad-header; return; fi
-  n="$(stat -c %s "$f")"
+  local f="$1" h n
+  shift
+  [ -e "$f" ] || "$@" test -e "$f" 2>/dev/null || { echo absent; return; }
+  h="$("$@" head -c 24 "$f" 2>/dev/null)" || { echo unreadable; return; }
+  [ "$h" = "# GRUB Environment Block" ] || { echo bad-header; return; }
+  n="$("$@" stat -c %s "$f" 2>/dev/null)" || { echo unreadable; return; }
   [ "$n" = 1024 ] || { echo "bad-size:$n"; return; }
   echo ok
+}
+
+# initrd_fallback_order — stdin: `systemctl cat grub-initrd-fallback.service`.
+# fixed | stale | none. Ubuntu LP#2156423 (fixed in grub2 for 26.04.1): the unit's
+# After= named grub-common.service, renamed to grub2-common.service, so the two units
+# ran in parallel and both rewrote /boot/grub/grubenv at boot. The loser reads a
+# half-written block ("invalid environment block") while the file on disk ends up
+# valid. stale = After= names the old unit and not the new one.
+initrd_fallback_order() {
+  local a
+  a="$(grep -v '^[[:space:]]*#' | grep -E '^[[:space:]]*After=' | tr ' =' '\n\n')"
+  if grep -qx 'grub2-common.service' <<<"$a"; then echo fixed
+  elif grep -qx 'grub-common.service' <<<"$a"; then echo stale
+  else echo none; fi
+}
+
+# initrd_fallback_dropin — the drop-in that applies the LP#2156423 ordering fix
+# locally (After= in a drop-in is additive; redundant but harmless once the fixed
+# grub2 package is installed).
+initrd_fallback_dropin() {
+  echo "# wq#5337: Ubuntu LP#2156423 — order after the renamed grub2-common.service so"
+  echo "# the two units stop racing on /boot/grub/grubenv at boot. Remove once"
+  echo "# grub2-common is upgraded (the packaged unit then carries the same After=)."
+  echo "[Unit]"
+  echo "After=grub2-common.service"
 }
 
 # --- maksoor max-brightness.service -------------------------------------------

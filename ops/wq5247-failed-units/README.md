@@ -72,6 +72,24 @@ list error) → `UNFIXED`.
 during boot after the unit read it, so the "readable grubenv" branch above was added; the
 first bundle refused that case as `UNFIXED`.
 
+**wq#5337 (from verify wq#5334):**
+- *Unreadable is not corrupt.* `remote-bes.sh` runs as the unescalated `bes` ssh user;
+  `grubenv_state` used to read the file as that user, so a permission failure came back
+  as `bad-header` and the script would back up and `grub-editenv create` a healthy env.
+  Reads (and `grub-editenv list`) now go through `sudo -n` when it works, and a read
+  failure is its own state, `unreadable` → `UNFIXED`, file untouched.
+- *The likely root cause is Ubuntu LP#2156423, not corruption.* The packaged
+  `grub-initrd-fallback.service` ordered `After=grub-common.service`, but that unit was
+  renamed `grub2-common.service`, so both units rewrite grubenv in parallel at boot and
+  one reads a half-written block. Fixed upstream in grub2 for Ubuntu 26.04.1
+  ("grub-initrd-fallback.service: After grub2-common.service"); Lumen's unit already has
+  it. `remote-bes.sh` reads `systemctl cat` (`initrd_fallback_order`): stale order while
+  `grub2-common.service` exists → installs the drop-in
+  `/etc/systemd/system/grub-initrd-fallback.service.d/wq5337-lp2156423.conf`
+  (`After=grub2-common.service`) + daemon-reload, whether or not the unit is failed right
+  now, and prints the real fix: `sudo apt-get install --only-upgrade grub2-common`
+  (the drop-in is redundant, not harmful, afterwards).
+
 ## Files
 - `install.sh` — entry point + `--verify` (ops/_verify.sh contract).
 - `lib.sh` — the decision helpers (pure; `audit_disable_rule` edits only its argument).

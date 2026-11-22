@@ -45,7 +45,8 @@ def stubs(tmp_path):
         case "$1" in
           is-failed) cat "{state}" ;;
           restart) echo inactive > "{state}" ;;
-          cat) cat "{tmp_path}/unit_text" 2>/dev/null ;;
+          cat) if [ "$2" = grub2-common.service ]; then cat "{tmp_path}/g2c_text" 2>/dev/null
+               else cat "{tmp_path}/unit_text" 2>/dev/null; fi ;;
           *) : ;;
         esac
     """)
@@ -117,6 +118,35 @@ def test_grubenv_state(tmp_path):
     assert lib('grubenv_state "$1"', str(g))[1].strip() == "bad-header"
     g.write_bytes(GOOD_ENV[:600])
     assert lib('grubenv_state "$1"', str(g))[1].strip() == "bad-size:600"
+
+
+def test_grubenv_state_unreadable_is_not_bad_header(tmp_path):
+    # wq#5337 (verify 5334 probe P1): a read failure must not read as a bad signature.
+    # A failing READER stands in for "no permission" so the probe holds even as root.
+    g = tmp_path / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    deny = tmp_path / "deny"
+    write_exe(deny, 'case "$1" in head|stat) echo "$1: Permission denied" >&2; exit 1 ;; esac; exec "$@"\n')
+    assert lib('grubenv_state "$1" "$2"', str(g), str(deny))[1].strip() == "unreadable"
+    allow = tmp_path / "allow"
+    write_exe(allow, 'exec "$@"\n')
+    assert lib('grubenv_state "$1" "$2"', str(g), str(allow))[1].strip() == "ok"
+    if os.geteuid() != 0:  # real mode-000 file, unprivileged reader
+        g.chmod(0)
+        try:
+            assert lib('grubenv_state "$1"', str(g))[1].strip() == "unreadable"
+        finally:
+            g.chmod(0o644)
+
+
+@pytest.mark.parametrize("text,want", [
+    ("[Unit]\nAfter=local-fs.target\nAfter=grub2-common.service\n", "fixed"),
+    ("[Unit]\nAfter=local-fs.target grub-common.service\n", "stale"),
+    ("[Unit]\n# After=grub-common.service\nAfter=local-fs.target\n", "none"),
+    ("[Unit]\nAfter=grub-common.service\n[Unit]\nAfter=grub2-common.service\n", "fixed"),
+])
+def test_initrd_fallback_order(text, want):
+    assert sh(f'. "{LIB}"; initrd_fallback_order', stdin=text).stdout.strip() == want
 
 
 def test_backlight_targets_and_dropin():
@@ -264,6 +294,74 @@ def test_bes_bad_size_grubenv_is_refused(stubs):
     assert p.returncode == 1 and "UNFIXED bes: grubenv is not corrupt" in p.stdout
     assert state.read_text().strip() == "failed"
     assert not (tmp / "grubenv.corrupt.bak.TS4").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a mode-000 file")
+def test_bes_unreadable_grubenv_is_not_recreated(stubs):
+    # wq#5337 / verify 5334 probe P1: healthy env the ssh user cannot read, sudo -n
+    # refused. The first bundle called it bad-header -> "grubenv corrupt" -> recreate.
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    _grub_stub(b, g)
+    write_exe(b / "sudo", "echo 'sudo: a password is required' >&2; exit 1\n")
+    g.chmod(0)
+    try:
+        for dry in ("1", "0"):
+            p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), dry, "TS5")
+            assert p.returncode == 1, p.stdout + p.stderr
+            assert "grubenv_state: unreadable" in p.stdout
+            assert "UNFIXED bes: cannot read" in p.stdout
+            assert "grubenv corrupt" not in p.stdout
+    finally:
+        g.chmod(0o644)
+    assert g.read_bytes() == GOOD_ENV and not (tmp / "grubenv.corrupt.bak.TS5").exists()
+    assert state.read_text().strip() == "failed"
+
+
+STALE_UNIT = ("# /usr/lib/systemd/system/grub-initrd-fallback.service\n[Unit]\n"
+              "After=local-fs.target\nAfter=grub-common.service\nAfter=sleep.target\n")
+
+
+def _race_env(stubs, grub2_common=True):
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    _grub_stub(b, g)
+    (tmp / "unit_text").write_text(STALE_UNIT)
+    if grub2_common:
+        (tmp / "g2c_text").write_text("[Unit]\nDescription=Record successful boot for GRUB\n")
+    d = tmp / "dropin"
+    return g, d, state, dict(env, WQ5247_GRUBENV=str(g), WQ5247_DROPIN_DIR=str(d))
+
+
+def test_bes_lp2156423_race_gets_ordering_dropin(stubs):
+    g, d, state, env = _race_env(stubs)
+    p = _remote("remote-bes.sh", env, "1", "TS6")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "LP#2156423 race possible: 1" in p.stdout and "would: install drop-in" in p.stdout
+    assert not d.exists() and state.read_text().strip() == "failed"
+    p = _remote("remote-bes.sh", env, "0", "TS6")
+    assert p.returncode == 0, p.stdout + p.stderr
+    conf = (d / "wq5337-lp2156423.conf").read_text()
+    assert "[Unit]\nAfter=grub2-common.service\n" in conf
+    assert state.read_text().strip() == "inactive" and g.read_bytes() == GOOD_ENV
+
+
+def test_bes_lp2156423_race_fixed_even_when_not_failed(stubs):
+    g, d, state, env = _race_env(stubs)
+    state.write_text("inactive")
+    p = _remote("remote-bes.sh", env, "0", "TS7")
+    assert p.returncode == 0 and "not failed now" in p.stdout, p.stdout + p.stderr
+    assert (d / "wq5337-lp2156423.conf").exists() and g.read_bytes() == GOOD_ENV
+
+
+def test_bes_old_name_without_grub2_common_is_no_race(stubs):
+    # Pre-rename package: grub-common.service is the real unit, so the order is right.
+    g, d, state, env = _race_env(stubs, grub2_common=False)
+    p = _remote("remote-bes.sh", env, "0", "TS8")
+    assert p.returncode == 0 and "LP#2156423 race possible: 0" in p.stdout, p.stdout
+    assert not d.exists() and state.read_text().strip() == "inactive"
 
 
 def test_maksoor_absent_backlight_gets_dropin(stubs):
