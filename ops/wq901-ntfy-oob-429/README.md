@@ -70,6 +70,17 @@ sudo -u lumen ops/wq901-ntfy-oob-429/install.sh
 Idempotent: edits `NTFY_OOB_PRIORITIES` in place, installs and enables the
 canary units, fires one canary immediately to prove the path.
 
+### Canary timer is intended-off (wq#5277)
+
+The 2026-10-08 timer massacre (wq#3648, phase 2) disabled `ntfy-oob-canary.timer` on
+purpose (`/home/lumen/scratch/subtraction/timers-disable-phase2.txt`, line 50;
+`timer-massacre-phase2.md`, line 62). `install.sh` carries `NTFY_OOB_CANARY_ON=0`: with
+it, `--verify` checks the `NTFY_OOB_PRIORITIES` marker and both unit files, not that the
+timer is enabled or active, and a root install copies the units without enabling or
+firing them. Do not run `install.sh` as root to "fix" the timer. Re-enabling the canary
+is a decision; whoever makes it sets `NTFY_OOB_CANARY_ON=1`, which restores the
+enabled/active/scheduled checks and the `enable --now` + first-fire install path.
+
 ## Revisit triggers
 
 - OOB canary 429s at 1/day → ntfy.sh has tightened anonymous limits; escalate
