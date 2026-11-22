@@ -426,7 +426,24 @@ nodes:                  # CLASS 6
        BUILD-lane `fleet-exec run nun1` gets DENY grant:grant_missing_env (ISSUE-LOG #192),
        so there is no remote fix. Next page on nun1: check whether a reboot or shutdown came
        just before LastSeen. If one did, it is that hang and needs a physical power cycle
-       ([frank-hw]); if not, it is a new fault and needs a fresh look."
+       ([frank-hw]); if not, it is a new fault and needs a fresh look.
+       wq#5212 (2026-11-21 page, LastSeen 13:50Z; worked 2026-11-22 04:16Z): NOT
+       self-resolved this time. Lumen's tailscaled journal puts the last packet from nun1
+       at ~13:46:42Z (first miss: a :22 connect timeout at 13:47:31, lastRecv=49s), and a
+       reprobe 14.5 h later still timed out on :22 and :11434 over the tailnet, with
+       192.168.8.150 giving No route to host (no ARP answer). The box is off, hung, or
+       has a dead NIC, not just off the tailnet. Nothing on record restarted or powered off
+       nun1 before the drop: no episode, no foreman worker event naming nun1, and
+       fleet-exec is still grant-denied. By the rule above this is a NEW fault, not the
+       ACPI-S5 power-off hang. Candidates are thermal (wq#5190: 86.8C Tctl under judge-bench
+       load, recheck never ran) or a kernel/GPU hang. Only the previous boot's journal can
+       tell them apart, and recovery is physical: wq#5225 [physical, frank_gated] asks for
+       a power cycle and a capture of the prior boot's journal. Judge impact while it is
+       dark: JUDGE_MODEL_PIN=nun1-qwen25coder7b falls back to JUDGE_MODEL_FALLBACK
+       lumen-qwen25coder7b, with 0 fail_closed_queue rows since the drop. Next page on
+       nun1: if wq#5225 is still frank_gated, this is the same outage and gets no new
+       triage. If the node came back and dropped again, read
+       /tmp/nun1-prevboot*.txt on nun1 first."
 
 ollama:                 # CLASS 7 (wq#3558)
   enabled: true
