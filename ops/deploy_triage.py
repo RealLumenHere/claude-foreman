@@ -92,8 +92,10 @@ REGISTER: dict[str, dict] = {
     "wq2086-presentation-stability": dict(
         disposition=KEEP_LIVE, units=["lumen-presentation-stability.timer"], follow_up=None,
         reason="minerva_presentation_stability.py is live and byte-identical, and the timer "
-               "the wq#2985 triage found absent is now installed and enabled (wq#3468 re-check, "
-               "2026-10-07)."),
+               "the wq#2985 triage found absent is installed (wq#3468 re-check, 2026-10-07) "
+               "but disabled on purpose: intended-off since the 2026-10-08 subtraction "
+               "(timers-disable-list.txt:7). install.sh gates enable on "
+               "PRESENTATION_STABILITY_ON=0 (wq#5314)."),
     "wq2851-aer-storm-alarm": dict(
         disposition=KEEP_DEPLOY, scope="remote", hosts=["isis", "hathor", "khepri", "nephthys"],
         follow_up="wq#3003",

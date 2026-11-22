@@ -16,19 +16,29 @@ BIN=/home/lumen/bin/minerva-presentation-stability
 UNIT_DIR=/etc/systemd/system
 UNITS="lumen-presentation-stability.service lumen-presentation-stability.timer"
 BAK=/home/lumen/backups/wq2086
+# wq#5314: 0 = intended-off (disabled by the 2026-10-08 subtraction,
+# /home/lumen/scratch/subtraction/timers-disable-list.txt:7). A deliberate re-enable flips
+# this to 1, which makes install enable+start the timer and --verify assert it enabled,
+# active and scheduled. Not an env override: the intent lives here (wq#5266 shape).
+PRESENTATION_STABILITY_ON=0
 
 if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vfile      "$SRC/minerva_presentation_stability.py" "$BIN"
   vunit_file "$SRC/lumen-presentation-stability.service" "$UNIT_DIR/lumen-presentation-stability.service"
   vunit_file "$SRC/lumen-presentation-stability.timer"   "$UNIT_DIR/lumen-presentation-stability.timer"
-  # wq#5258: no venabled/vactive/vtimer_scheduled for lumen-presentation-stability.timer:
-  # intended-off, disabled by the 2026-10-08 subtraction
-  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:7, phase2-results.txt:7).
-  # Asserting enabled+active made --verify fail permanently, and the ops-root-apply it filed
-  # told the reader to run this script as root, which runs `systemctl enable --now` and
-  # undoes the subtraction. The unit files are still checked above. Re-enabling the timer
-  # is a decision, not a heal; whoever makes it adds venabled/vactive/vtimer_scheduled here.
+  # wq#5258: lumen-presentation-stability.timer is intended-off, disabled by the 2026-10-08
+  # subtraction (/home/lumen/scratch/subtraction/timers-disable-list.txt:7,
+  # phase2-results.txt:7). Asserting enabled+active made --verify fail permanently, and the
+  # ops-root-apply it filed told the reader to run this script as root, whose
+  # `systemctl enable --now` undid the subtraction. The unit files are still checked above.
+  # Re-enabling the timer is a decision, not a heal: whoever makes it sets
+  # PRESENTATION_STABILITY_ON=1 above (wq#5314).
+  if [ "$PRESENTATION_STABILITY_ON" = 1 ]; then
+    venabled         lumen-presentation-stability.timer
+    vactive          lumen-presentation-stability.timer
+    vtimer_scheduled lumen-presentation-stability.timer
+  fi
   vdone
 fi
 
@@ -73,16 +83,25 @@ if [ -w "$UNIT_DIR" ]; then
     chmod 0644 "$UNIT_DIR/$u"
   done
   systemctl daemon-reload
-  systemctl enable --now lumen-presentation-stability.timer
-  echo "wq2086 install: timer enabled"
+  if [ "$PRESENTATION_STABILITY_ON" = 1 ]; then
+    systemctl enable --now lumen-presentation-stability.timer
+    echo "wq2086 install: timer enabled"
+  else
+    # wq#5314: intended-off; a root replay installs files but must not undo the subtraction.
+    echo "wq2086 install: units installed; timer left as-is (intended-off, PRESENTATION_STABILITY_ON=0)"
+  fi
   echo "rollback: systemctl disable --now lumen-presentation-stability.timer && rm -f \\"
   echo "  $UNIT_DIR/lumen-presentation-stability.{service,timer} $BIN && systemctl daemon-reload"
 else
-  echo "wq2086 install: $UNIT_DIR not writable — units NOT installed. The probe is live"
-  echo "  but nothing schedules it. Privileged steps still owed:"
+  echo "wq2086 install: $UNIT_DIR not writable — units NOT installed. Privileged steps still owed:"
   for u in $UNITS; do echo "    install -m 0644 $SRC/$u $UNIT_DIR/$u"; done
   echo "    systemctl daemon-reload"
-  echo "    systemctl enable --now lumen-presentation-stability.timer"
+  if [ "$PRESENTATION_STABILITY_ON" = 1 ]; then
+    echo "    systemctl enable --now lumen-presentation-stability.timer"
+  else
+    # wq#5314: not an owed step while intended-off; printing it handed a root replay the undo.
+    echo "  (timer intended-off, PRESENTATION_STABILITY_ON=0: do NOT enable it)"
+  fi
   echo "  Confirm with: bash $SRC/install.sh --verify"
   exit 3
 fi

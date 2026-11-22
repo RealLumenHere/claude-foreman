@@ -100,10 +100,15 @@ units honestly.
 The 2026-10-08 subtraction disabled `lumen-presentation-stability.timer` on purpose
 (`/home/lumen/scratch/subtraction/timers-disable-list.txt`, line 7; confirmed
 `inactive/disabled` in `phase2-results.txt`, line 7). So `install.sh --verify` checks the
-probe script and the two unit files, not that the timer is enabled or active. Do not run
-`install.sh` as root to "fix" the timer: it runs `systemctl enable --now` and undoes the
-subtraction. Re-enabling the timer is a decision. If someone makes it, they put
-`venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
+probe script and the two unit files, not that the timer is enabled or active.
+
+wq#5314 made that intent a flag in the file: `PRESENTATION_STABILITY_ON=0` at the top of
+`install.sh`. While it is 0, a root run installs the script and unit files but leaves the
+timer as-is (no `systemctl enable --now`), and the unprivileged branch no longer lists
+enabling it as an owed step. Re-enabling the timer is a decision: whoever makes it sets the
+flag to 1, which turns on `enable --now` in install and `venabled`/`vactive`/
+`vtimer_scheduled` in `--verify`. Regression test:
+`ops/tests/test_wq5314_presentation_stability_intended_off.py`.
 
 Rollback:
 
