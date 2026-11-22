@@ -12,11 +12,21 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # double-filed every CVE proposal, which is precisely what the refusal prevents.
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
-  venabled minerva-promote.timer
-  vactive  minerva-promote.timer
-  # wq#4910: no vtimer_scheduled for minerva-promote.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/REPORT.md 1A). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # The successor's units must be installed as wq#1500 ships them...
+  vunit_file "$HERE/../wq1500-minerva-promoter/minerva-promote.service" \
+             /etc/systemd/system/minerva-promote.service
+  vunit_file "$HERE/../wq1500-minerva-promoter/minerva-promote.timer" \
+             /etc/systemd/system/minerva-promote.timer
+  # ...but wq#5252: no venabled/vactive/vtimer_scheduled for minerva-promote.timer. It is
+  # intended-off: the 2026-10-08 subtraction stopped and disabled the whole Minerva
+  # proposal machine on purpose (/home/lumen/scratch/subtraction/REPORT.md:25-26, 1A:
+  # factory, classifier, proposal, eval, promote, defer-review), and all six timers are
+  # still disabled. With the factory off there is nothing to promote. Asserting
+  # enabled+active failed --verify permanently, and the ops-root-apply it filed (wq#5252)
+  # told the reader to run this bundle as root, which only hits the refusal below (or,
+  # with WQ1396_FORCE_LEGACY=1, installs the superseded promoter). Re-enabling the
+  # Minerva machine is a decision, not a heal; whoever makes it adds
+  # venabled/vactive/vtimer_scheduled minerva-promote.timer back here.
   for u in minerva-proposal-promoter.service minerva-proposal-promoter.timer; do
     if [ -e "/etc/systemd/system/$u" ]; then
       _vmiss "superseded unit present: /etc/systemd/system/$u (wq#1500 owns this job)"
