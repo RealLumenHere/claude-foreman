@@ -7,6 +7,10 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 DEST=/home/lumen/services/lumen-cert-watch
+# wq#5259: 0 = intended-off (disabled by the 2026-10-08 subtraction). A deliberate
+# re-enable flips this to 1, which makes install enable+start the timer and --verify
+# assert it enabled, active and scheduled. Not an env override: the intent lives here.
+CERT_WATCH_ON=0
 
 # wq#1696 deploy-verify contract (ops/_verify.sh). Read-only; before any install
 # step. Added by wq#2092's own close pass: the bundle landed 2026-09-19 with no
@@ -26,11 +30,18 @@ if [ "${1:-}" = --verify ]; then
   [ -z "$terr" ] || _vmiss "$terr"
   vunit_file "$SRC/lumen-cert-watch.service" /etc/systemd/system/lumen-cert-watch.service
   vunit_file "$SRC/lumen-cert-watch.timer" /etc/systemd/system/lumen-cert-watch.timer
-  vactive lumen-cert-watch.timer
-  # wq#4910: no vtimer_scheduled for lumen-cert-watch.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
-  venabled lumen-cert-watch.timer
+  # wq#5259: lumen-cert-watch.timer is intended-off: the 2026-10-08 subtraction disabled it
+  # on purpose (/home/lumen/scratch/subtraction/timers-disable-phase2.txt:14). wq#4910
+  # dropped vtimer_scheduled for that reason but left vactive/venabled, so --verify failed
+  # forever and filed an ops-root-apply telling the reader to run this script as root,
+  # whose `enable --now` would have undone the subtraction (same class as wq#5257). The
+  # unit files and installed copy are still verified; the timer's state is not asserted.
+  # Re-enabling it is a decision, not a heal: whoever makes it sets CERT_WATCH_ON=1 above.
+  if [ "$CERT_WATCH_ON" = 1 ]; then
+    vactive lumen-cert-watch.timer
+    venabled lumen-cert-watch.timer
+    vtimer_scheduled lumen-cert-watch.timer
+  fi
   vdone
 fi
 
@@ -41,9 +52,13 @@ install -o lumen -g lumen -m 755 "$SRC/cert_watch.py" "$DEST/cert_watch.py"
 
 cp "$SRC/lumen-cert-watch.service" "$SRC/lumen-cert-watch.timer" /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now lumen-cert-watch.timer
-
-echo "lumen-cert-watch.timer installed; first run at boot+10min, then every 24h"
+if [ "$CERT_WATCH_ON" = 1 ]; then
+  systemctl enable --now lumen-cert-watch.timer
+  echo "lumen-cert-watch.timer installed; first run at boot+10min, then every 24h"
+else
+  # wq#5259: intended-off; installing files must not undo the 2026-10-08 subtraction.
+  echo "lumen-cert-watch units installed; timer left as-is (intended-off, CERT_WATCH_ON=0)"
+fi
 echo "dry run:    python3 $DEST/cert_watch.py run --dry-run"
 echo "manual run: systemctl start lumen-cert-watch.service"
 echo "logs:       journalctl -u lumen-cert-watch.service -n 100 --no-pager"

@@ -38,6 +38,15 @@ ever stops or the installed copy drifts:
 bash /home/lumen/foreman/ops/wq2092-cert-watch/install.sh --verify
 ```
 
+**Intended-off since 2026-10-08 (wq#5259).** The subtraction disabled
+`lumen-cert-watch.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-phase2.txt:14`). `install.sh`
+ships `CERT_WATCH_ON=0`: install copies files but does not enable/start the
+timer, and `--verify` checks the installed files and unit files but does not
+assert the timer live. Re-enabling is a decision, not a heal: flip
+`CERT_WATCH_ON=1`, then install and verify assert enabled+active+scheduled.
+Test: `ops/tests/test_wq5259_cert_watch_intended_off.py`.
+
 Rollback: `systemctl disable --now lumen-cert-watch.timer`, remove
 `/etc/systemd/system/lumen-cert-watch.{service,timer}` and
 `/home/lumen/services/lumen-cert-watch/`. Nothing else is mutated.
