@@ -1079,6 +1079,20 @@ def _ops_root_apply_title(bundle):
     return f"[ops-root-apply] {bundle}: install.sh --verify fails, needs privileged install"
 
 
+def _bundle_verify_passes(install_path, timeout=120):
+    """wq#5303: True only when `bash <install_path> --verify` exits 0. Any doubt
+    (missing script, non-zero exit, timeout, exec error) is False, so the caller
+    still files the follow-up — the check can only suppress a provably needless one."""
+    if not install_path or not os.path.isfile(install_path):
+        return False
+    try:
+        p = subprocess.run(["bash", install_path, "--verify"], capture_output=True,
+                           text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return p.returncode == 0
+
+
 def file_root_apply_followups(ticket_id, lane, followups):
     """wq#4778 (ISSUE-LOG #1636): acceptance.verify()'s citation gate now accepts a
     `no_deploy_needed` override on an ops-bundle citation (same shape as wq done's own
@@ -1097,6 +1111,16 @@ def file_root_apply_followups(ticket_id, lane, followups):
         bundle = f.get("bundle") or "?"
         install_path = f.get("install_path") or "?"
         why = f.get("why") or "no_deploy_needed"
+        # wq#5303: the title asserts "--verify fails". Check that first: when the
+        # bundle's own read-only --verify already passes (ops/_verify.sh contract: exit
+        # 0 only when every live target matches), there is nothing to root-apply, and
+        # filing anyway loops — wq#5262 fixed a verify on an intended-off timer, closed
+        # with no_deploy_needed, and got wq#5303 telling the next worker to run the
+        # install as root, the exact act its reason said must not happen.
+        if _bundle_verify_passes(install_path):
+            log(f"wq#{ticket_id}: {bundle} --verify passes ({install_path}) — "
+                f"no root-apply follow-up filed (wq#5303)")
+            continue
         title = _ops_root_apply_title(bundle)
         detail = (f"wq#{ticket_id}'s evidence citation closed over {install_path} with "
                   f"no_deploy_needed={why!r}. Run the bundle's install.sh as root (or with "
