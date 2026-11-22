@@ -9,4 +9,7 @@ User=lumen
 ExecStart=/home/lumen/services/trivy-weekly/scan.sh
 StandardOutput=journal
 StandardError=journal
-TimeoutStartSec=1800
+# wq#5239: budget = 2 x trivy rootfs --timeout 45m (scan.sh) + per-image scans (trivy
+# image default 5m each) + DB update. 1800 was shorter than one rootfs walk's own cap,
+# so systemd would kill a slow walk before Trivy's timeout. Measured runs take ~5 min.
+TimeoutStartSec=4h

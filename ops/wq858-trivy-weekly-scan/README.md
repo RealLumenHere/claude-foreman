@@ -85,16 +85,24 @@ wq#4899 deleted those files. If you need them, they are in git history before th
 commit. `ops/deploy_triage.py` now lists the bundle as LIVE, with `trivy-scan.*` in
 `absent_units`.
 
-## Known gaps (out of scope for wq#4899; the live behaviour is kept as-is)
+## Fixed by wq#5239 (were known gaps after wq#4899)
 
-- **Timeout headroom.** Each of the two `trivy rootfs` calls may run up to 45 minutes,
-  but the unit's `TimeoutStartSec=1800` is 30 minutes for the whole oneshot. Measured
-  runs take about 5 minutes. If a walk ever goes slow, systemd kills the job before
-  Trivy's own timeout fires. The ExecStartPost stamp then never lands and the dead-man
-  pages, so the failure is noisy rather than silent.
-- **ntfy password in argv.** The `curl -u "lumen:$(grep NTFY_PASS …)"` calls put the
-  ntfy password in curl's argv while it runs, where `/proc/<pid>/cmdline` exposes it to
-  local users. The fix is to pass it by `-K -` on stdin or with a 0600 netrc. That
-  changes the payload, so it needs its own pin and deploy.
+- **Timeout headroom.** The unit's `TimeoutStartSec` was `1800` (30 minutes for the
+  whole oneshot), shorter than either of the two `trivy rootfs --timeout 45m` calls, so a
+  slow walk would be killed by systemd before Trivy's own timeout fired. It is now `4h`:
+  2 x 45m rootfs, plus the per-image scans (Trivy's default 5m each) and the DB update.
+  Measured runs take about 5 minutes, so this only matters when something is wrong.
+- **ntfy password in argv.** The old `curl -u "lumen:$(grep NTFY_PASS …)"` calls put the
+  ntfy password in curl's argv, where `/proc/<pid>/cmdline` exposes it to local users.
+  `scan.sh` now has one `ntfy_send` helper that reads the password into an unexported
+  shell variable and pipes `user = "lumen:…"` to `curl -K -` with the bash `printf`
+  builtin, so no process argv holds it. The value is escaped for curl's config syntax
+  (backslash, double quote), and `cut -d= -f2-` keeps a password that contains `=`.
+  `ops/tests/test_wq5239_trivy_ntfy_argv.py` runs the helper against a local HTTP server
+  with a curl shim that logs argv, and checks the password reaches the Authorization
+  header but appears on no argv.
+
+## Known gaps
+
 - The HIGH and CRITICAL counts are a `grep -c` over the text report, so they are
   approximate (the script labels them that way).

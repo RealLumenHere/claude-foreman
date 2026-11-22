@@ -63,26 +63,30 @@ find "$REPORT_DIR" -name 'trivy_*.txt' -mtime +90 -delete 2>/dev/null || true
 find "$REPORT_DIR" -name 'trivy_*.json' -mtime +90 -delete 2>/dev/null || true
 
 # --- Notify ---
-if [ "$FAILED" -eq 1 ]; then
-  curl -s -u "lumen:$(grep NTFY_PASS /home/lumen/agent/.env | cut -d= -f2)" \
-    -H "Title: Trivy weekly scan FAILED (no valid report)" -H "Priority: high" -H "Tags: rotating_light" \
-    -d "No valid JSON report. See $REPORT and $JSON_REPORT.err" \
+# wq#5239: the ntfy password never goes on curl's argv (/proc/<pid>/cmdline is readable
+# by every local user). It is read into an unexported shell variable and handed to curl
+# as a config file on stdin (-K -); printf is a bash builtin, so no process argv holds it.
+# Config quoted-string escapes: backslash and double quote.
+ntfy_send() {  # ntfy_send TITLE PRIORITY TAGS BODY
+  local pass
+  pass="$(grep -m1 NTFY_PASS /home/lumen/agent/.env 2>/dev/null | cut -d= -f2-)" || true
+  pass="${pass//\\/\\\\}"
+  pass="${pass//\"/\\\"}"
+  printf 'user = "lumen:%s"\n' "$pass" | curl -s -K - \
+    -H "Title: $1" -H "Priority: $2" -H "Tags: $3" -d "$4" \
     "http://127.0.0.1:8080/$NTFY_TOPIC" 2>/dev/null || true
+}
+
+if [ "$FAILED" -eq 1 ]; then
+  ntfy_send "Trivy weekly scan FAILED (no valid report)" high rotating_light \
+    "No valid JSON report. See $REPORT and $JSON_REPORT.err"
   echo "[!] Done with FAILURE."; exit 1
 elif [ "$CRIT_COUNT" -gt 0 ]; then
-  curl -s -u "lumen:$(cat /home/lumen/agent/.env | grep NTFY_PASS | cut -d= -f2)" \
-    -H "Title: Trivy: $CRIT_COUNT CRITICAL CVEs found" \
-    -H "Priority: high" \
-    -H "Tags: warning" \
-    -d "Weekly scan found $CRIT_COUNT CRITICAL and $HIGH_COUNT HIGH. Report: $REPORT" \
-    "http://127.0.0.1:8080/$NTFY_TOPIC" 2>/dev/null || true
+  ntfy_send "Trivy: $CRIT_COUNT CRITICAL CVEs found" high warning \
+    "Weekly scan found $CRIT_COUNT CRITICAL and $HIGH_COUNT HIGH. Report: $REPORT"
 else
-  curl -s -u "lumen:$(cat /home/lumen/agent/.env | grep NTFY_PASS | cut -d= -f2)" \
-    -H "Title: Trivy weekly: $HIGH_COUNT HIGH, 0 CRITICAL" \
-    -H "Priority: default" \
-    -H "Tags: white_check_mark" \
-    -d "Clean scan. Report: $REPORT" \
-    "http://127.0.0.1:8080/$NTFY_TOPIC" 2>/dev/null || true
+  ntfy_send "Trivy weekly: $HIGH_COUNT HIGH, 0 CRITICAL" default white_check_mark \
+    "Clean scan. Report: $REPORT"
 fi
 
 echo "[*] Done."
