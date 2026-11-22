@@ -61,9 +61,16 @@ failed on Thor on 2026-08-08 because grubenv was corrupt ("invalid environment b
 `agents/work-queue/reports/fleet_update_20260808.md:55-58`), fixed by backing it up and
 `grub-editenv create`. `remote-bes.sh` checks the signature (`grubenv_state`) and
 `grub-editenv list`; only on corruption does it back up to
-`grubenv.corrupt.bak.<ts>` and recreate. A readable grubenv → `UNFIXED` (other cause:
-read-only or full `/boot`), journal printed. **Root cause unconfirmed: same-class
-precedent only.**
+`grubenv.corrupt.bak.<ts>` and recreate. Signature ok and `list` rc=0 → the failure was
+boot-time only: reset-failed + restart the unit (its own two `unset` calls), file never
+touched; still failing → `UNFIXED`, journal printed. Any other state (bad size, absent,
+list error) → `UNFIXED`.
+
+**wq#5332 live diagnosis (root, 2026-11-22):** journal `invalid environment block` at
+2026-11-12 23:27:49 (boot), but grubenv's mtime is that same minute and it is valid now
+(signature ok, `grub-editenv list` rc=0; `/` rw ext4, 7% used). The file was rewritten
+during boot after the unit read it, so the "readable grubenv" branch above was added; the
+first bundle refused that case as `UNFIXED`.
 
 ## Files
 - `install.sh` — entry point + `--verify` (ops/_verify.sh contract).

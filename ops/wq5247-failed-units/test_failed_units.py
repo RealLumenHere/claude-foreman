@@ -228,13 +228,42 @@ def test_bes_corrupt_grubenv(stubs):
 
 
 def test_bes_healthy_grubenv_is_not_touched(stubs):
+    # wq#5332: a valid grubenv means the boot-time failure is gone — re-run the unit,
+    # never back up or recreate the file.
     tmp, b, state, env = stubs
     g = tmp / "grubenv"
     g.write_bytes(GOOD_ENV)
     _grub_stub(b, g)
-    p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), "0", "TS2")
+    env = dict(env, WQ5247_GRUBENV=str(g))
+    p = _remote("remote-bes.sh", env, "1", "TS2")
+    assert p.returncode == 0 and "would: reset-failed + restart" in p.stdout, p.stdout
+    assert state.read_text().strip() == "failed"
+    p = _remote("remote-bes.sh", env, "0", "TS2")
+    assert p.returncode == 0 and "boot-time failure only" in p.stdout, p.stdout + p.stderr
+    assert state.read_text().strip() == "inactive"
+    assert not (tmp / "grubenv.corrupt.bak.TS2").exists() and g.read_bytes() == GOOD_ENV
+
+
+def test_bes_healthy_grubenv_restart_still_fails(stubs):
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    _grub_stub(b, g)
+    write_exe(b / "systemctl", f'[ "$1" = is-failed ] && cat "{state}"; exit 0\n')
+    p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), "0", "TS3")
+    assert p.returncode == 1 and "UNFIXED bes: grub-initrd-fallback.service still fails" in p.stdout
+    assert not (tmp / "grubenv.corrupt.bak.TS3").exists() and g.read_bytes() == GOOD_ENV
+
+
+def test_bes_bad_size_grubenv_is_refused(stubs):
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(b"# GRUB Environment Block\n" + b"#" * 575)
+    _grub_stub(b, g)
+    p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), "0", "TS4")
     assert p.returncode == 1 and "UNFIXED bes: grubenv is not corrupt" in p.stdout
-    assert not (tmp / "grubenv.corrupt.bak.TS2").exists()
+    assert state.read_text().strip() == "failed"
+    assert not (tmp / "grubenv.corrupt.bak.TS4").exists()
 
 
 def test_maksoor_absent_backlight_gets_dropin(stubs):
