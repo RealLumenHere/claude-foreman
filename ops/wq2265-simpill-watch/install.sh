@@ -22,6 +22,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-simpill-watch.timer"   /etc/systemd/system/lumen-simpill-watch.timer
   venabled   lumen-simpill-watch.timer
   vactive    lumen-simpill-watch.timer
+  # wq#4910: no vtimer_scheduled for lumen-simpill-watch.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vcontains  "$STATE" '"baselined": *true'
   vcontains  "$REPOS" '"fork_owner": *"[^"]+"'
   vcontains  "$REPOS" '"us": *\[ *"[^"]+"'

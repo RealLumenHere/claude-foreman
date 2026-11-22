@@ -17,6 +17,7 @@ if [ "${1:-}" = --verify ]; then
   vfile "$SRC/../wq3169-litellm-completion-probe/litellm-completion-probe" "$BIN/litellm-completion-probe"
   vfile "$SRC/../wq2903-model-ref-drift/lumen_model_watchdog.py" "$WD"
   vactive litellm-completion-probe.timer
+  vtimer_scheduled litellm-completion-probe.timer  # wq#4910: vactive also passes SubState=elapsed
   # post-window only: the dead rungs are gone from the gateway config
   for rung in claude-opus-5 claude-max-sonnet claude-max-opus lumen-lfm2.5-2.6b kimik3-0.4b-local; do
     if grep -q "model_name: *['\"]*$rung" /home/lumen/agent/litellm_config.yaml 2>/dev/null; then

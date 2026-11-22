@@ -12,6 +12,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/litellm-completion-probe.timer" /etc/systemd/system/litellm-completion-probe.timer
   venabled litellm-completion-probe.timer
   vactive litellm-completion-probe.timer
+  vtimer_scheduled litellm-completion-probe.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

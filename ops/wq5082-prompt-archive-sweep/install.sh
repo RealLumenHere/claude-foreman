@@ -13,6 +13,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/prompt-archive-sweep.timer"   /etc/systemd/system/prompt-archive-sweep.timer
   venabled prompt-archive-sweep.timer
   vactive prompt-archive-sweep.timer
+  vtimer_scheduled prompt-archive-sweep.timer  # wq#4910: vactive also passes SubState=elapsed
   vflag "$BIN" --dry-run
   vdone
 fi

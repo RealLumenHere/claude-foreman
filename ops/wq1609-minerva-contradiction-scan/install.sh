@@ -12,6 +12,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-contradiction-scan.timer"   /etc/systemd/system/lumen-contradiction-scan.timer
   venabled   lumen-contradiction-scan.timer
   vactive    lumen-contradiction-scan.timer
+  # wq#4910: no vtimer_scheduled for lumen-contradiction-scan.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

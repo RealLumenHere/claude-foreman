@@ -27,6 +27,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-cert-watch.service" /etc/systemd/system/lumen-cert-watch.service
   vunit_file "$SRC/lumen-cert-watch.timer" /etc/systemd/system/lumen-cert-watch.timer
   vactive lumen-cert-watch.timer
+  # wq#4910: no vtimer_scheduled for lumen-cert-watch.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   venabled lumen-cert-watch.timer
   vdone
 fi

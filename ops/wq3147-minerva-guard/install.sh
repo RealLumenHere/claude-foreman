@@ -14,6 +14,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-minerva-guard.service" /etc/systemd/system/lumen-minerva-guard.service
   vunit_file "$SRC/lumen-minerva-guard.timer" /etc/systemd/system/lumen-minerva-guard.timer
   vactive lumen-minerva-guard.timer
+  # wq#4910: no vtimer_scheduled for lumen-minerva-guard.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   venabled lumen-minerva-guard.timer
   vdone
 fi

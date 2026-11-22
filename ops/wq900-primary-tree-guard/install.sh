@@ -19,6 +19,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/primary-tree-guard.timer" /etc/systemd/system/primary-tree-guard.timer
   venabled primary-tree-guard.timer
   vactive primary-tree-guard.timer
+  # wq#4910: no vtimer_scheduled for primary-tree-guard.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

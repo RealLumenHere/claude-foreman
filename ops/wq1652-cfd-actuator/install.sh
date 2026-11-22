@@ -16,6 +16,7 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/lumen-cfd-actuator.timer
   venabled   lumen-cfd-actuator.timer
   vactive    lumen-cfd-actuator.timer
+  vtimer_scheduled lumen-cfd-actuator.timer  # wq#4910: vactive also passes SubState=elapsed
   [ -e /etc/sudoers.d/lumen-cfd-actuator ] \
     || _vmiss "absent: /etc/sudoers.d/lumen-cfd-actuator"
   vdone

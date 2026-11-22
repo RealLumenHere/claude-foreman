@@ -14,6 +14,9 @@ if [ "${1:-}" = --verify ]; then
   for u in "${UNITS[@]}"; do vunit_file "$HERE/$u" "/etc/systemd/system/$u"; done
   venabled lumen-sentinel-audit.timer
   vactive lumen-sentinel-audit.timer
+  # wq#4910: no vtimer_scheduled for lumen-sentinel-audit.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vflag "$BIN" --check
   vdone
 fi

@@ -19,6 +19,11 @@ if [ "${1:-}" = --verify ]; then
     vunit_file "$SRC/lumen-spof-$c.timer"   "/etc/systemd/system/lumen-spof-$c.timer"
     venabled   "lumen-spof-$c.timer"
     vactive    "lumen-spof-$c.timer"
+    # wq#4910: vactive also passes SubState=elapsed, so the intended-on timers must have a
+    # real next elapse. roundtrip/restarts are intended-off (disabled by the 2026-10-08
+    # subtraction, scratch/subtraction/timers-disable-list.txt); re-enabling one is a
+    # decision, not a heal, and whoever makes it adds it to this case.
+    case "$c" in daemons|timers) vtimer_scheduled "lumen-spof-$c.timer" ;; esac
   done
   vdone
 fi

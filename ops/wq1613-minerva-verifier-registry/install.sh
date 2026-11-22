@@ -58,6 +58,7 @@ if [ "${1:-}" = --verify ]; then
   if systemctl is-enabled --quiet lumen-state-verify.timer 2>/dev/null || [ "${LUMEN_VERIFY_ENABLE_TIMER:-0}" = 1 ]; then
     venabled lumen-state-verify.timer
     vactive lumen-state-verify.timer
+    vtimer_scheduled lumen-state-verify.timer  # wq#4910: vactive also passes SubState=elapsed
   else
     case "$(systemctl is-active lumen-state-verify.timer 2>/dev/null || true)" in
       active|activating) _vmiss "lumen-state-verify.timer disabled but active (gate wq#3750 bypassed)" ;;

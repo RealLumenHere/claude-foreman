@@ -21,6 +21,9 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/wq394-netdata-sampler.timer
   venabled   wq394-netdata-sampler.timer
   vactive    wq394-netdata-sampler.timer
+  # wq#4910: no vtimer_scheduled for wq394-netdata-sampler.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/REPORT.md 1G). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vactive    netdata.service
   vdone
 fi

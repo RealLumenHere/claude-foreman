@@ -22,6 +22,9 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/prefs-block-check.timer
   venabled   prefs-block-check.timer
   vactive    prefs-block-check.timer
+  # wq#4910: no vtimer_scheduled for prefs-block-check.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

@@ -21,6 +21,7 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/langfuse-trace-rate-monitor.timer
   venabled   langfuse-trace-rate-monitor.timer
   vactive    langfuse-trace-rate-monitor.timer
+  vtimer_scheduled langfuse-trace-rate-monitor.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

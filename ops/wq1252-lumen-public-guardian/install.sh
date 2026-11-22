@@ -27,6 +27,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-public-guardian.timer" /etc/systemd/system/lumen-public-guardian.timer
   venabled lumen-public-guardian.timer
   vactive lumen-public-guardian.timer
+  # wq#4910: no vtimer_scheduled for lumen-public-guardian.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

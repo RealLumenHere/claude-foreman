@@ -23,6 +23,9 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/langfuse-lag-monitor.timer
   venabled   langfuse-lag-monitor.timer
   vactive    langfuse-lag-monitor.timer
+  # wq#4910: no vtimer_scheduled for langfuse-lag-monitor.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

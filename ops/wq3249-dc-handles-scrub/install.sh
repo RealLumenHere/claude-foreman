@@ -10,6 +10,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/dc-handles-scrub.timer"   /etc/systemd/system/dc-handles-scrub.timer
   venabled   dc-handles-scrub.timer
   vactive    dc-handles-scrub.timer
+  # wq#4910: no vtimer_scheduled for dc-handles-scrub.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

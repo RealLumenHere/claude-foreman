@@ -16,6 +16,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-drift-plan.timer" /etc/systemd/system/lumen-drift-plan.timer
   venabled lumen-drift-plan.timer
   vactive lumen-drift-plan.timer
+  # wq#4910: no vtimer_scheduled for lumen-drift-plan.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vcontains /home/lumen/dashboard/dashboard_api.py '# --- wq#2434 drift plans'
   vdone
 fi

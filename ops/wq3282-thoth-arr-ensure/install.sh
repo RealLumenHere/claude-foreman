@@ -12,6 +12,7 @@ if [ "${1:-}" = --verify ]; then
     vunit_file "$HERE/thoth-arr-ensure.timer" /etc/systemd/system/thoth-arr-ensure.timer
     venabled thoth-arr-ensure.timer
     vactive thoth-arr-ensure.timer
+    vtimer_scheduled thoth-arr-ensure.timer  # wq#4910: vactive also passes SubState=elapsed
   else
     # payload lives on thoth: check it there (ops/VERIFY_CONTRACT.md, unreachable = ERR not MISS)
     H=thoth@100.75.1.108

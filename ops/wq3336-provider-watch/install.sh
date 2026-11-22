@@ -18,6 +18,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/provider-watch.timer" "$UNIT_DIR/provider-watch.timer"
   venabled   provider-watch.timer
   vactive    provider-watch.timer
+  # wq#4910: no vtimer_scheduled for provider-watch.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

@@ -12,6 +12,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-stale-env-audit.timer"   /etc/systemd/system/lumen-stale-env-audit.timer
   venabled lumen-stale-env-audit.timer
   vactive lumen-stale-env-audit.timer
+  vtimer_scheduled lumen-stale-env-audit.timer  # wq#4910: vactive also passes SubState=elapsed
   # The unit's ExecStart flags have to exist in the binary it calls. wq#3228 found the
   # opposite case live, where a byte-identical caller gated on flags the callee lacked.
   vflag /home/lumen/bin/stale-env-audit --aq

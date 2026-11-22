@@ -14,6 +14,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-iptables-drift-guard.timer" /etc/systemd/system/lumen-iptables-drift-guard.timer
   venabled   lumen-iptables-drift-guard.timer
   vactive    lumen-iptables-drift-guard.timer
+  # wq#4910: no vtimer_scheduled for lumen-iptables-drift-guard.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 DEST=/home/lumen/services/lumen-iptables-drift-guard

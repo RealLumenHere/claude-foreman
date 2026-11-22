@@ -47,6 +47,9 @@ if [ "${1:-}" = --verify ]; then
   venabled   lumen-gatus-ntfy-relay.service
   venabled   lumen-cron-deadman.timer
   vactive    lumen-cron-deadman.timer
+  # wq#4910: no vtimer_scheduled for lumen-cron-deadman.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   [ -e "$SECRETS_ENV" ] || _vmiss "absent: $SECRETS_ENV"
   vdone
 fi

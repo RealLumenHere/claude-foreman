@@ -27,6 +27,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/gitleaks-detect.timer"   /etc/systemd/system/gitleaks-detect.timer
   venabled   gitleaks-detect.timer
   vactive    gitleaks-detect.timer
+  vtimer_scheduled gitleaks-detect.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

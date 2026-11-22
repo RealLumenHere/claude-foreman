@@ -29,6 +29,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/mcp-gateway-watchdog.timer" /etc/systemd/system/mcp-gateway-watchdog.timer
   venabled mcp-gateway-watchdog.timer
   vactive mcp-gateway-watchdog.timer
+  # wq#4910: no vtimer_scheduled for mcp-gateway-watchdog.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vfile "$HERE/cloudflared-metrics.conf" /etc/systemd/system/cloudflared.service.d/wq2606-metrics.conf
   vfile "$HERE/supergateway-logrotate.conf" /etc/logrotate.d/supergateway
   vdone

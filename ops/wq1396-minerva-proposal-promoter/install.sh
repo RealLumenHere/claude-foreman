@@ -14,6 +14,9 @@ if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
   venabled minerva-promote.timer
   vactive  minerva-promote.timer
+  # wq#4910: no vtimer_scheduled for minerva-promote.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/REPORT.md 1A). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   for u in minerva-proposal-promoter.service minerva-proposal-promoter.timer; do
     if [ -e "/etc/systemd/system/$u" ]; then
       _vmiss "superseded unit present: /etc/systemd/system/$u (wq#1500 owns this job)"

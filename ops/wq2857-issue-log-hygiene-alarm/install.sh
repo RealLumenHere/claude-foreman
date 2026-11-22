@@ -21,6 +21,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/issue-log-hygiene.timer"   /etc/systemd/system/issue-log-hygiene.timer
   venabled   issue-log-hygiene.timer
   vactive    issue-log-hygiene.timer
+  # wq#4910: no vtimer_scheduled for issue-log-hygiene.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

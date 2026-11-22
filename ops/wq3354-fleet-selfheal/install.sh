@@ -55,10 +55,12 @@ if [ "${1:-}" = --verify ]; then
   for u in "${UNITS[@]}"; do vunit_file "$SRC/$u" "/etc/systemd/system/$u"; done
   venabled lumen-fleet-selfheal.timer
   vactive  lumen-fleet-selfheal.timer
+  vtimer_scheduled lumen-fleet-selfheal.timer  # wq#4910: vactive also passes SubState=elapsed
   venabled lumen-leakwatch.service
   vactive  lumen-leakwatch.service
   venabled lumen-exposure-census.timer
   vactive  lumen-exposure-census.timer
+  vtimer_scheduled lumen-exposure-census.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

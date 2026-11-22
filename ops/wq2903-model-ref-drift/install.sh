@@ -17,6 +17,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/lumen-model-ref-lint.timer" /etc/systemd/system/lumen-model-ref-lint.timer
   venabled lumen-model-ref-lint.timer
   vactive lumen-model-ref-lint.timer
+  vtimer_scheduled lumen-model-ref-lint.timer  # wq#4910: vactive also passes SubState=elapsed
   vcontains "$QM" '"mistral": +"deepseek-v4-flash"'
   vcontains /home/lumen/minerva/model_audit.py '"deepseek-v4-pro"\)  # wq#2903'
   # the fleet worker imports PROVIDER_TO_MODEL once: it must have restarted after the patch

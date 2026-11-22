@@ -14,6 +14,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-disk-pct-alarm.timer"   /etc/systemd/system/lumen-disk-pct-alarm.timer
   venabled lumen-disk-pct-alarm.timer
   vactive lumen-disk-pct-alarm.timer
+  vtimer_scheduled lumen-disk-pct-alarm.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

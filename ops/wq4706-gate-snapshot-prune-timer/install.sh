@@ -11,6 +11,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/gate-snapshot-prune.timer"   /etc/systemd/system/gate-snapshot-prune.timer
   venabled   gate-snapshot-prune.timer
   vactive    gate-snapshot-prune.timer
+  vtimer_scheduled gate-snapshot-prune.timer  # wq#4910: vactive also passes SubState=elapsed
   # wq#4706: a vfile+vactive pair proves the unit is installed, not that the thing it runs
   # still works — the defect this bundle fixes was code with no caller, and a unit whose
   # ExecStart has rotted away under it is the same shape of lie (wq#3228). So ask the

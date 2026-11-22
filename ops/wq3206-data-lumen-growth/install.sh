@@ -16,6 +16,9 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-data-lumen-growth.timer"   /etc/systemd/system/lumen-data-lumen-growth.timer
   venabled lumen-data-lumen-growth.timer
   vactive lumen-data-lumen-growth.timer
+  # wq#4910: no vtimer_scheduled for lumen-data-lumen-growth.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

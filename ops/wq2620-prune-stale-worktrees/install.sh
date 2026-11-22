@@ -12,6 +12,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/lumen-prune-worktrees.timer" /etc/systemd/system/lumen-prune-worktrees.timer
   venabled lumen-prune-worktrees.timer
   vactive lumen-prune-worktrees.timer
+  vtimer_scheduled lumen-prune-worktrees.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

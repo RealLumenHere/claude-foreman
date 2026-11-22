@@ -16,6 +16,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$HERE/research-prompt-adapter.timer"   /etc/systemd/system/research-prompt-adapter.timer
   venabled research-prompt-adapter.timer
   vactive research-prompt-adapter.timer
+  vtimer_scheduled research-prompt-adapter.timer  # wq#4910: vactive also passes SubState=elapsed
   vflag "$BIN" --dry-run
   vflag "$BIN" --max-per-run
   vcontains /home/lumen/minerva/context/fleet_tools.yaml "name: research-prompt-adapter"

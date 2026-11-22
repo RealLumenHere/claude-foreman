@@ -35,8 +35,14 @@ if [ "${1:-}" = --verify ]; then
   done
   venabled lumen-budget-alert.timer
   vactive  lumen-budget-alert.timer
+  # wq#4910: no vtimer_scheduled for lumen-budget-alert.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   venabled lumen-deepseek-spend.timer
   vactive  lumen-deepseek-spend.timer
+  # wq#4910: no vtimer_scheduled for lumen-deepseek-spend.timer: intended-off, disabled by the
+  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
+  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
   vdone
 fi
 

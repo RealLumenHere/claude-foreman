@@ -11,6 +11,7 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/secret-backup-sweep.timer"   /etc/systemd/system/secret-backup-sweep.timer
   venabled   secret-backup-sweep.timer
   vactive    secret-backup-sweep.timer
+  vtimer_scheduled secret-backup-sweep.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 

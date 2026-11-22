@@ -18,6 +18,7 @@ if [ "${1:-}" = --verify ]; then
              /etc/systemd/system/cf-token-liveness.timer
   venabled   cf-token-liveness.timer
   vactive    cf-token-liveness.timer
+  vtimer_scheduled cf-token-liveness.timer  # wq#4910: vactive also passes SubState=elapsed
   vdone
 fi
 
