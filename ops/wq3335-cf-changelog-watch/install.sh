@@ -19,11 +19,13 @@ if [ "${1:-}" = --verify ]; then
   vfile "$SRC/cf_changelog_watch.py" "$DEST"
   vunit_file "$SRC/cf-changelog-watch.service" /etc/systemd/system/cf-changelog-watch.service
   vunit_file "$SRC/cf-changelog-watch.timer" /etc/systemd/system/cf-changelog-watch.timer
-  vactive cf-changelog-watch.timer
-  # wq#4910: no vtimer_scheduled for cf-changelog-watch.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
-  venabled cf-changelog-watch.timer
+  # wq#5272: no venabled/vactive/vtimer_scheduled for cf-changelog-watch.timer:
+  # intended-off, disabled by the 2026-10-08 subtraction
+  # (/home/lumen/scratch/subtraction/timers-disable-phase2.txt:2). Asserting it
+  # enabled+active made --verify fail forever and filed an ops-root-apply telling the
+  # reader to run this script as root, which runs `systemctl enable --now` and undoes
+  # the subtraction. The script and unit files are still checked above. Re-enabling is
+  # a decision, not a heal; whoever makes it adds venabled/vactive/vtimer_scheduled back.
   vdone
 fi
 
