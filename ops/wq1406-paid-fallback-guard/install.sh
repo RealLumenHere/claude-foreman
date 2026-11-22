@@ -19,30 +19,40 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 #     (spend-alert.py: %-of-budget thresholds + 2x-7d runaway burn, wq#720). The other
 #     half (paid_fallback_alert callback) needs a gateway config merge + proxy restart
 #     the bundle never staged.
+#     (wq#5253: both timers were since disabled on purpose by the 2026-10-08
+#     subtraction, wq#3648, so this drain is currently unpaged by them. Reason 1 alone
+#     still keeps the bundle retired; any revival decision should weigh that gap.)
 #
 # Kept rather than deleted so the refusal below stops a future blind deploy off an
 # ABSENT verdict. To revive: port the key read to lumen_env.env_value, show a paid
-# model the two live timers miss, then set WQ1406_FORCE_RETIRED_DEPLOY=1.
+# model the two timers above would miss (re-enabled or not), then set WQ1406_FORCE_RETIRED_DEPLOY=1.
 
 # wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step.
-# Inverted for a retired bundle: our units stay absent, the replacements stay live.
+# Inverted for a retired bundle: our units stay absent, the replacements' unit files
+# stay present (their timers are intended-off, see wq#5253 below).
 if [ "${1:-}" = --verify ]; then
   . "$HERE/../_verify.sh"
+  # WQ1406_UNIT_DIR exists for tests (ops/tests/test_wq5253_retired_verify.py) only.
+  UNITS="${WQ1406_UNIT_DIR:-/etc/systemd/system}"
   for u in paid-spend-tripwire.service paid-spend-tripwire.timer; do
-    if [ -e "/etc/systemd/system/$u" ]; then
-      _vmiss "retired unit present: /etc/systemd/system/$u (wq#3486)"
+    if [ -e "$UNITS/$u" ]; then
+      _vmiss "retired unit present: $UNITS/$u (wq#3486)"
     fi
   done
-  venabled lumen-budget-alert.timer
-  vactive  lumen-budget-alert.timer
-  # wq#4910: no vtimer_scheduled for lumen-budget-alert.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
-  venabled lumen-deepseek-spend.timer
-  vactive  lumen-deepseek-spend.timer
-  # wq#4910: no vtimer_scheduled for lumen-deepseek-spend.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5253: no venabled/vactive/vtimer_scheduled for the two replacement timers. Both
+  # are intended-off: the 2026-10-08 subtraction disabled them on purpose
+  # (lumen-budget-alert.timer: /home/lumen/scratch/subtraction/timers-disable-phase2.txt:13,
+  # timer-massacre-phase2.md section C; lumen-deepseek-spend: timers-disable-list.txt:35).
+  # Asserting enabled+active made --verify fail permanently, and the ops-root-apply it
+  # filed (wq#5253) asked for a root run that cannot help: this script refuses to install
+  # (exit 2 below) and never touches either timer. Only their unit files are checked, so
+  # they stay re-enableable. Re-enabling them is a decision, not a heal; whoever makes it
+  # adds venabled/vactive/vtimer_scheduled back here.
+  for u in lumen-budget-alert.timer lumen-deepseek-spend.timer; do
+    if [ ! -e "$UNITS/$u" ]; then
+      _vmiss "replacement unit file absent: $UNITS/$u"
+    fi
+  done
   vdone
 fi
 

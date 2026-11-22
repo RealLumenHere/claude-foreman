@@ -7,6 +7,20 @@ local-only, wq#722/wq#907 — see `foreman/reports/wq907_lpp_brain_liveness_2026
 This is the SYSTEMIC fix at the gateway layer, so the next instance of this
 class — any caller, any chain — can't repeat it silently.
 
+## Status: RETIRED, and `--verify` checks (wq#3486, wq#5253)
+
+wq#3486 retired this bundle. `install.sh` refuses to install it (exit 2); see the
+header comment for why. `install.sh --verify` checks two things. The
+paid-spend-tripwire units are absent from `/etc/systemd/system`. The unit files of
+the two replacement timers, `lumen-budget-alert.timer` and
+`lumen-deepseek-spend.timer`, are present. It does not check that these timers are
+enabled or active, because the 2026-10-08 subtraction disabled both on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-phase2.txt` line 13,
+`timers-disable-list.txt` line 35). Running `install.sh` as root does not change any
+of this. Re-enabling the timers is a decision. Whoever makes it adds
+`venabled`/`vactive`/`vtimer_scheduled` back to the verify block. Test:
+`ops/tests/test_wq5253_retired_verify.py`.
+
 ## Components
 
 | File | Deploy target | Purpose |
