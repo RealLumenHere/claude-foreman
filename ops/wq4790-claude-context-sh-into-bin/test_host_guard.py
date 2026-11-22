@@ -76,3 +76,43 @@ def test_core_prints_guard_before_anything_else(tmp_path):
 def test_live_latest_md_block_is_tracked():
     # the LATEST.md block was live-only drift; installing this copy must not drop it
     assert "fleet-intel/sessions/LATEST.md" in SCRIPT.read_text()
+
+
+# wq#5246 deploy-verify: install.sh puts this copy at /home/lumen/bin/claude_context.sh. The
+# checks below read the LIVE path, so a drifted or un-deployed live copy fails them (they skip
+# only off-Lumen, where the live path does not exist).
+LIVE = pathlib.Path(os.environ.get("CLAUDE_CONTEXT_DST", "/home/lumen/bin/claude_context.sh"))
+_live = pytest.mark.skipif(not LIVE.exists(), reason="live claude_context.sh not on this host")
+
+
+@_live
+def test_live_copy_matches_tracked():
+    assert LIVE.read_bytes() == SCRIPT.read_bytes(), (
+        "live %s drifted from tracked copy; run install.sh" % LIVE)
+
+
+@_live
+def test_live_host_check_on_carrier(tmp_path):
+    # run the LIVE script (not the tracked one) with hostname pinned to the carrier
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    stub = bindir / "hostname"
+    stub.write_text("#!/bin/sh\necho lumen\n")
+    stub.chmod(stub.stat().st_mode | stat.S_IXUSR)
+    env = dict(os.environ, PATH="%s:%s" % (bindir, os.environ.get("PATH", "/usr/bin:/bin")))
+    env.pop("CLAUDE_CONTEXT_EXPECT_HOST", None)
+    r = subprocess.run(["bash", str(LIVE), "--host-check"],
+                       env=env, capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0
+    assert r.stdout.splitlines()[0].startswith("===== HOST: lumen (user ")
+
+
+@_live
+def test_live_core_ends_with_latest_session_block():
+    # --core's last section is still the LATEST SESSION block (static: a real --core run hits
+    # live wq/session-briefing renderers)
+    src = LIVE.read_text()
+    core = src[src.index('if [ "$1" = "--core" ]; then'):]
+    tail = core[core.rindex("===== LATEST SESSION"):]
+    assert "===== END LATEST SESSION =====" in tail
+    assert "=====" not in tail.split("===== END LATEST SESSION =====", 1)[1]
