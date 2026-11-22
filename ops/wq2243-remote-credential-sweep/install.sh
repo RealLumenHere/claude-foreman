@@ -11,11 +11,16 @@ if [ "${1:-}" = --verify ]; then
   . "$SRC/../_verify.sh"
   vunit_file "$SRC/remote-credential-sweep.service" /etc/systemd/system/remote-credential-sweep.service
   vunit_file "$SRC/remote-credential-sweep.timer" /etc/systemd/system/remote-credential-sweep.timer
-  venabled remote-credential-sweep.timer
-  vactive remote-credential-sweep.timer
-  # wq#4910: no vtimer_scheduled for remote-credential-sweep.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5261: no venabled/vactive/vtimer_scheduled for remote-credential-sweep.timer. It is
+  # intended-off: the 2026-10-08 subtraction disabled it on purpose
+  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:82, phase2-results.txt:82), and
+  # its return is still a proposal awaiting Frank (credential-consolidation.md section 3
+  # item 2: a weekly scan replacing the lumen-secret-check cron, not this hourly timer).
+  # wq#4910 dropped vtimer_scheduled but kept enabled+active, so --verify failed permanently
+  # and the ops-root-apply it filed (wq#5261) told the reader to run this script as root,
+  # whose `systemctl enable --now` would undo the subtraction. Same fix as wq#5255.
+  # The unit files are still checked above. Re-enabling the timer is a decision, not a
+  # heal; whoever makes it adds venabled/vactive/vtimer_scheduled back here.
   vdone
 fi
 

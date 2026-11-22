@@ -42,6 +42,14 @@ session transcript. Treat that token as burned.
 `install.sh` installs an hourly `remote-credential-sweep.timer` running
 `scan --fix --notify` from the foreman checkout.
 
+The timer is intended-off: the 2026-10-08 subtraction disabled it
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt:82`), and bringing it
+back is a pending proposal (`credential-consolidation.md` section 3 item 2), not
+a heal. So `install.sh --verify` checks only the deployed unit files, not
+enabled/active (wq#5261). Do not run `install.sh` as root to "fix" a red verify:
+its `systemctl enable --now` would undo the subtraction. Whoever decides to
+re-enable it adds `venabled`/`vactive`/`vtimer_scheduled` back to `--verify`.
+
 ## Ticket steps
 
 | step | state |
