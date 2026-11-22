@@ -22,11 +22,13 @@ if [ "${1:-}" = --verify ]; then
   vfile      "$SRC/minerva_presentation_stability.py" "$BIN"
   vunit_file "$SRC/lumen-presentation-stability.service" "$UNIT_DIR/lumen-presentation-stability.service"
   vunit_file "$SRC/lumen-presentation-stability.timer"   "$UNIT_DIR/lumen-presentation-stability.timer"
-  venabled   lumen-presentation-stability.timer
-  vactive    lumen-presentation-stability.timer
-  # wq#4910: no vtimer_scheduled for lumen-presentation-stability.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-list.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5258: no venabled/vactive/vtimer_scheduled for lumen-presentation-stability.timer:
+  # intended-off, disabled by the 2026-10-08 subtraction
+  # (/home/lumen/scratch/subtraction/timers-disable-list.txt:7, phase2-results.txt:7).
+  # Asserting enabled+active made --verify fail permanently, and the ops-root-apply it filed
+  # told the reader to run this script as root, which runs `systemctl enable --now` and
+  # undoes the subtraction. The unit files are still checked above. Re-enabling the timer
+  # is a decision, not a heal; whoever makes it adds venabled/vactive/vtimer_scheduled here.
   vdone
 fi
 

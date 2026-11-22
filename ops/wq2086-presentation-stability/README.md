@@ -95,6 +95,16 @@ privileged: without write access to `/etc/systemd/system` it prints the owed com
 exits 3, leaving the script live and unscheduled — `--verify` then reports the missing
 units honestly.
 
+### Timer is intended-off (wq#5258)
+
+The 2026-10-08 subtraction disabled `lumen-presentation-stability.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt`, line 7; confirmed
+`inactive/disabled` in `phase2-results.txt`, line 7). So `install.sh --verify` checks the
+probe script and the two unit files, not that the timer is enabled or active. Do not run
+`install.sh` as root to "fix" the timer: it runs `systemctl enable --now` and undoes the
+subtraction. Re-enabling the timer is a decision. If someone makes it, they put
+`venabled`/`vactive`/`vtimer_scheduled` back in the verify block.
+
 Rollback:
 
 ```bash
