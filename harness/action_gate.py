@@ -266,6 +266,25 @@ ENERGIZE_CONFIRM_RED = [
      "energize-confirm verifier/token directory (Frank-only, wq#5216)"),
 ]
 
+# guard.sh's wq#3861 prose exemption, mirrored for ENERGIZE_CONFIRM_RED only: a lone
+# call to wq or issue_log_append.py executes none of its quoted arguments, so a ticket
+# note naming the energize-confirm dirs must not read as touching them. Same shape
+# test: no newline/CR/$/backtick/backslash, and nothing separator-shaped or an
+# unbalanced quote left once the quoted strings are blanked.
+_PROSE_EXEMPT_RE = re.compile(
+    r'^(/home/lumen/bin/wq|python3 +/home/lumen/foreman/harness/issue_log_append\.py)\s')
+
+
+def _prose_blanked(cmd):
+    """The command with quoted strings blanked if it is a lone prose-carrying call
+    (see _PROSE_EXEMPT_RE), else None."""
+    if any(c in cmd for c in "\n\r$`\\") or not _PROSE_EXEMPT_RE.match(cmd):
+        return None
+    blanked = re.sub(r'"[^"]*"|\'[^\']*\'', "Q", _norm(cmd))
+    if re.search(r'[;&|()<>"\']', blanked):
+        return None
+    return blanked
+
 # --------------------------------------------------------------------------
 # wq#1006 — research phase gate (wires the declared phase_gates:[research,...]).
 # A project with hardware_class set REQUIRES a non-empty PRIOR_ART.md before
@@ -885,10 +904,15 @@ def classify_bash(cmd, rules, cwd=None):
         if r:
             return "RED", r, None, False
     hw_class = bool(rules.get("hardware_class"))
-    for target in targets:
+    blanked = _prose_blanked(cmd)
+    # The dequoted copies close `energize_confirm.py "is""sue"`-style splits.
+    ec_targets = (blanked,) if blanked is not None else \
+        targets + tuple(re.sub(r'["\'\\]', "", t) for t in targets)
+    for target in ec_targets:
         for pat, reason in ENERGIZE_CONFIRM_RED:
             if re.search(pat, target, re.IGNORECASE):
                 return "RED", reason, None, True
+    for target in targets:
         # gate-tamper: any mutation touching a rules file is RED
         if RULES_BASENAME.rsplit(".", 1)[0] in target and _MUTATION_MARKERS.search(target):
             return "RED", "mutation of .fworker-rules.yaml (gate tamper)", None, False

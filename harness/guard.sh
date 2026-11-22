@@ -198,6 +198,23 @@ Bash)
     done
   done
 
+  # ---- wq#5216: energize-confirm mint and its directories ----
+  # Energize-confirm tokens unlock target-energizing hardware MCP tools. Minting needs
+  # Frank's passphrase (harness/energize_confirm.py); this denies an agent even trying
+  # (script(1) pty + prompt) and touching the verifier/token dirs (swapping in its own
+  # public key). Same patterns as action_gate.py ENERGIZE_CONFIRM_RED.
+  # `energize_confirm.py verify` stays allowed. Scans VERB_SCAN_TARGETS so a lone wq /
+  # issue_log_append call can quote these paths as prose (it executes nothing), plus a
+  # dequoted copy so `energize_confirm.py "is""sue"` splits do not slip through.
+  EC_DENY_RE="energize_confirm(\.py)?[[:space:]]+(issue|set-passphrase)\b|(^|[^[:alnum:]_])(issue_token|set_passphrase|_write_verifier)[[:space:]]*\(|(\.config/energize-confirm|re/\.energize-confirm)\b"
+  for target in "${VERB_SCAN_TARGETS[@]}"; do
+    for t in "$target" "$(printf '%s' "$target" | tr -d "\"'\\\\")"; do
+      if printf '%s' "$t" | grep -qE "$EC_DENY_RE"; then
+        block "denied: energize-confirm mint/passphrase or its verifier/token dir (Frank-only, wq#5216)" "$RAW_CMD"
+      fi
+    done
+  done
+
   # ---- wq#4550 (duplicate report: wq#4551), widened by wq#4568 ----
   # RealLumenHere/ccc is a public GitHub mirror of a Class C, never-public repo
   # (agent-scope.conf has no ALLOW for it — lumen/ccc's ALLOW line explicitly
@@ -298,14 +315,6 @@ Bash)
     fi
     if printf '%s' "$target" | grep -qE '/home/lumen/\.secrets\b'; then
       block "denied path: /home/lumen/.secrets (wq#616 static oauth token lives there)" "$RAW_CMD"
-    fi
-    # wq#5216: energize-confirm tokens unlock target-energizing hardware MCP tools. Minting
-    # needs Frank's passphrase (harness/energize_confirm.py); this denies an agent even
-    # trying (script(1) pty + prompt) and touching the verifier/token dirs (swapping in
-    # its own public key). Same patterns as action_gate.py ENERGIZE_CONFIRM_RED.
-    # `energize_confirm.py verify` stays allowed.
-    if printf '%s' "$target" | grep -qE "energize_confirm(\.py)?['\"]?[[:space:]]+(issue|set-passphrase)\b|(^|[^[:alnum:]_])(issue_token|set_passphrase|_write_verifier)[[:space:]]*\(|(\.config/energize-confirm|re/\.energize-confirm)\b"; then
-      block "denied: energize-confirm mint/passphrase or its verifier/token dir (Frank-only, wq#5216)" "$RAW_CMD"
     fi
     # Bash-side twin of the Read/Grep credential deny below: the credentials file, its
     # timestamped .bak copies, and the minerva context sections that mirror it (027 +

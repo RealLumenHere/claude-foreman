@@ -1558,6 +1558,8 @@ ENERGIZE_CONFIRM_MUST_BLOCK = [
     ("Bash", {"command": "python3 -c 'import energize_confirm as e; print(e.issue_token(\"serial.write\"))'"}),
     ("Bash", {"command": "cp my.json /home/lumen/.config/energize-confirm/verifier.json"}),
     ("Bash", {"command": "ls ~/re/.energize-confirm"}),
+    ("Bash", {"command": f"python3 {EC} \"is\"\"sue\" serial.write"}),
+    ("Bash", {"command": "/home/lumen/bin/wq note 1 \"x\"; cp k /home/lumen/.config/energize-confirm/verifier.json"}),
     ("Write", {"file_path": "/home/lumen/.config/energize-confirm/verifier.json", "content": "{}"}),
     ("Write", {"file_path": "/home/lumen/re/.energize-confirm/" + "e" * 64 + ".json", "content": "{}"}),
     ("Edit", {"file_path": "/home/lumen/.config/energize-confirm/verifier.json",
@@ -1567,6 +1569,12 @@ ENERGIZE_CONFIRM_MUST_ALLOW = [
     ("Bash", {"command": f"python3 {EC} verify serial.write abc"}),
     ("Bash", {"command": "grep -n energize_confirm harness/action_gate.py"}),
     ("Bash", {"command": "python3 -m pytest -q harness/tests/test_energize_confirm.py"}),
+    # a lone wq / issue_log_append call executes none of its quoted prose (wq#3861 exemption)
+    ("Bash", {"command": "/home/lumen/bin/wq add --title \"deploy\" --detail \"Frank: python3 "
+                         "harness/energize_confirm.py set-passphrase; verifier at "
+                         "/home/lumen/.config/energize-confirm/verifier.json\""}),
+    ("Bash", {"command": "python3 /home/lumen/foreman/harness/issue_log_append.py --issue "
+                         "\"token files in ~/re/.energize-confirm were unsigned\" --status fixed"}),
 ]
 
 

@@ -662,6 +662,8 @@ EC_PY = "/home/lumen/foreman/harness/energize_confirm.py"
     "python3 - <<'EOF'\nimport energize_confirm as e\nprint(e.issue_token('serial.write'))\nEOF",
     "cp k.json /home/lumen/.config/energize-confirm/verifier.json",
     "printf x > /home/lumen/re/.energize-confirm/f.json",
+    f"python3 {EC_PY} \"is\"\"sue\" serial.write",
+    "/home/lumen/bin/wq note 1 \"x\"; cp k /home/lumen/.config/energize-confirm/verifier.json",
 ])
 def test_wq5216_energize_confirm_mint_and_dirs_are_floored_red(cmd):
     verdict, reason, _snap, hw_floor = ag.classify_bash(cmd, {})
@@ -672,6 +674,9 @@ def test_wq5216_energize_confirm_mint_and_dirs_are_floored_red(cmd):
 @pytest.mark.parametrize("cmd", [
     f"python3 {EC_PY} verify serial.write abc",
     "grep -n energize_confirm harness/action_gate.py",
+    # a lone wq call executes none of its quoted prose (guard.sh's wq#3861 exemption)
+    "/home/lumen/bin/wq add --title \"deploy\" --detail \"Frank: python3 harness/energize_confirm.py "
+    "set-passphrase; verifier at /home/lumen/.config/energize-confirm/verifier.json\"",
 ])
 def test_wq5216_energize_confirm_verify_stays_green(cmd):
     assert ag.classify_bash(cmd, {})[0] == "GREEN"
