@@ -7,6 +7,16 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
 CHECKS=(daemons roundtrip restarts timers)
+# wq#5257: only these timers are intended-on. roundtrip/restarts are intended-off: the
+# 2026-10-08 subtraction disabled them on purpose
+# (/home/lumen/scratch/subtraction/timers-disable-list.txt:71-72), while daemons/timers
+# were kept (timers-keep-phase2.txt:28-29). Their unit files still ship and are still
+# verified, but nothing here enables, starts or asserts them live. Before wq#5257,
+# --verify demanded all four enabled+active, failed forever, and the ops-root-apply it
+# filed told the reader to run this script as root, whose `enable --now` loop would have
+# undone the subtraction. Re-enabling one is a decision, not a heal; whoever makes it
+# adds it to ENABLED.
+ENABLED=(daemons timers)
 
 # wq#1696 deploy-verify contract (wq#2985). Read-only, before any install step
 # -- in particular before the pytest gate below, which is not read-only enough
@@ -17,13 +27,13 @@ if [ "${1:-}" = --verify ]; then
   for c in "${CHECKS[@]}"; do
     vunit_file "$SRC/lumen-spof-$c.service" "/etc/systemd/system/lumen-spof-$c.service"
     vunit_file "$SRC/lumen-spof-$c.timer"   "/etc/systemd/system/lumen-spof-$c.timer"
+  done
+  for c in "${ENABLED[@]}"; do
     venabled   "lumen-spof-$c.timer"
     vactive    "lumen-spof-$c.timer"
     # wq#4910: vactive also passes SubState=elapsed, so the intended-on timers must have a
-    # real next elapse. roundtrip/restarts are intended-off (disabled by the 2026-10-08
-    # subtraction, scratch/subtraction/timers-disable-list.txt); re-enabling one is a
-    # decision, not a heal, and whoever makes it adds it to this case.
-    case "$c" in daemons|timers) vtimer_scheduled "lumen-spof-$c.timer" ;; esac
+    # real next elapse.
+    vtimer_scheduled "lumen-spof-$c.timer"
   done
   vdone
 fi
@@ -50,19 +60,17 @@ for c in "${CHECKS[@]}"; do
     "/etc/systemd/system/lumen-spof-$c.timer"
 done
 systemctl daemon-reload
-for c in "${CHECKS[@]}"; do
+# wq#5257: intended-on timers only; roundtrip/restarts stay as the subtraction left them.
+for c in "${ENABLED[@]}"; do
   systemctl enable --now "lumen-spof-$c.timer"
 done
 systemctl list-timers 'lumen-spof-*' --no-pager || true
 
-echo "== first real pass of each check (against the live alerts.db) =="
-for c in "${CHECKS[@]}"; do
+echo "== first real pass of each enabled check (against the live alerts.db) =="
+for c in "${ENABLED[@]}"; do
   systemctl start "lumen-spof-$c.service"
   systemctl show "lumen-spof-$c.service" -p Result --value
 done
-
-echo "== round-trip proof: this is the one that needs the live alert path =="
-journalctl -u lumen-spof-roundtrip.service -n 5 --no-pager
 
 cat <<'EOF'
 

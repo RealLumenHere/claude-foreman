@@ -77,7 +77,18 @@ ssh lumen@100.117.66.102 'lumen-run --root bash /home/lumen/foreman/ops/wq1704-m
 ```
 
 `install.sh` gates on the suite and on `verify_fires.py` before it installs
-anything, then enables the four timers and runs one real pass of each.
+anything, installs all four unit pairs, then enables and runs one real pass of
+the two intended-on timers only (`ENABLED=(daemons timers)`).
+
+**wq#5257: `roundtrip` and `restarts` are intended-off.** The 2026-10-08
+subtraction disabled both on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt:71-72`) and kept
+`daemons`/`timers` (`timers-keep-phase2.txt:28-29`). `--verify` used to demand
+all four enabled+active, so it failed forever, and the ops-root-apply it filed
+(wq#5257) said to run this script as root, which would have re-enabled both and
+undone the subtraction. `--verify` now checks all four unit files plus
+enabled/active/scheduled for the `ENABLED` set only, and the install loop only
+enables that set. Re-enabling either timer is a decision: add it to `ENABLED`.
 
 ## Known gaps left open, and why
 
