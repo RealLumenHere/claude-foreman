@@ -63,3 +63,13 @@ journalctl -u lumen-ir-triage -n 20
 
 Rollback: `systemctl disable --now lumen-ir-triage.timer && rm -f /etc/systemd/system/lumen-ir-triage.{service,timer} /home/lumen/minerva/ir_triage.py && systemctl daemon-reload`.
 This leaves any proposal rows it already wrote. Reject them in the UI.
+
+### Timer is intended-off (wq#5267)
+
+The 2026-10-08 subtraction disabled `lumen-ir-triage.timer` on purpose
+(`/home/lumen/scratch/subtraction/timers-disable-list.txt:2`). With `IR_TRIAGE_ON=0` in
+`install.sh`, install ships the script and unit files but does not enable/start the timer
+or run a smoke pass, and `--verify` checks the script and unit files but does not assert
+the timer live. Re-enabling is a decision, not a heal: flip `IR_TRIAGE_ON=1`, then install
+enables+starts it and verify asserts enabled+active+scheduled.
+Test: `ops/tests/test_wq5267_ir_triage_intended_off.py`.
