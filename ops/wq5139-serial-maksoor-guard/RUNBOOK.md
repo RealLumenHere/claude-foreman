@@ -46,6 +46,19 @@ ssh -t lumen@100.117.66.102 'python3 /home/lumen/foreman/harness/energize_confir
 `-t` matters: issue refuses without a TTY. Single-use, 5 min. Hand the token to the session; the
 bridge verifies it and strips it before serial-mcp sees it.
 
+Since wq#5216 `issue` also asks for Frank's approval passphrase and the bridge accepts only token
+records signed by the passphrase-derived Ed25519 key (verifier = public key only). Until the
+passphrase is set, every energizing call is refused (fail closed). Frank sets it once (12+ chars;
+rerun to rotate, given the current one):
+
+```
+ssh -t lumen@100.117.66.102 'python3 /home/lumen/foreman/harness/energize_confirm.py set-passphrase'
+```
+
+After any change to `harness/energize_confirm.py`, rerun `install.sh`: the bridge imports its own
+installed copy (`~/.local/share/mcp/serial-maksoor/energize_confirm.py`), and `--verify` reports a
+MISS while that copy differs from the repo.
+
 Caveats:
 * `open` is ungated. On most USB-UART adapters opening the port asserts DTR, which resets an
   Arduino-style target wired to DTR. Same as before this bundle; gate it too if that matters.
@@ -67,3 +80,14 @@ definitions, regenerate, commit.
 * `probe_guarded.py ~/.local/share/mcp/serial-maksoor/launch.sh`: 12/12 vs live serial-mcp, 20 tools listed.
 * Live session on FT232R `/dev/ttyUSB0` (loopback jumper) through the guard: open -> read -> get_status
   -> close OK; transact without token refused before reaching the UART.
+
+## Evidence (2026-11-22, wq#5233: deploy of wq#5216 signed records)
+
+* `test_serial_guard.py` under the shared guard venv (python 3.12, fastmcp with server extra):
+  11 passed (adds `test_hand_written_token_file_refused`: an unsigned token file is refused).
+* `install.sh` then `install.sh --verify`: `VERIFY OK` both times. Installed
+  `energize_confirm.py` sha256 `e49c856d...` = repo, `http_stdio_bridge.py` `66a10050...` = repo
+  (were `ef722eba...` / `4004b8b2...`, pre-wq5216). Pre-install copy:
+  `/home/lumen/backups/serial-maksoor.pre-wq5233.20261122_0545`.
+* Ran through `lumen-run` (systemd transient unit): the worker allowlist refuses both
+  `bash .../install.sh` and the guard venv's python/pytest directly.
