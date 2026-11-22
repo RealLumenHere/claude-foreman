@@ -81,6 +81,12 @@ blocked (2 failed attempts, ticket wq-blocked), `13` limit (ticket released, res
 outside the resume window). `16`/`17`/`18` are fire-mode-only (timeout release /
 diagnosis failed / apply incomplete) — see "Fire-mode" below.
 
+Tickets routed to an opus/sonnet/haiku model can run on the `sdk` runtime
+(`harness/fworker_sdk.py`, which spends the plan's monthly API credit) while that credit
+lasts, and fall back to the `claude` CLI otherwise. See
+[SDK runtime: spending the plan's monthly API credit (wq#5211)](#sdk-runtime-spending-the-plans-monthly-api-credit-wq5211)
+at the bottom of this file.
+
 ## Fire-mode: fleet-fires manual-approval workflow (wq#717, AUTO-5)
 
 `--archetype fire-response` replaces the normal retry-ladder attempt with a dedicated
