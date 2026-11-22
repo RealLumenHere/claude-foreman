@@ -1,0 +1,13 @@
+[PLFM] Init I2C: OK(0)
+[BLDR] Build Time: 20190816-120000
+[EMI] DRAM type: LPDDR3
+[PART] blksz: 512B
+[PART] [0x0000000000080000-0x00000000000BFFFF] "proinfo" (512 blocks)
+NOTICE:  BL31: v1.3(release):
+NOTICE:  BL31: Built : 12:00:00, Aug 16 2019
+[LK] boot mode: NORMAL_BOOT
+[BOOT_TAG] boot reason: power_key
+[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Linux version 4.4.146 (builder@host) (gcc version 4.9.x) #1 SMP PREEMPT
+[    2.104512] init: init first stage started!
+[    3.882011] SELinux: Loaded policy from /vendor/etc/selinux/precompiled_sepolicy
