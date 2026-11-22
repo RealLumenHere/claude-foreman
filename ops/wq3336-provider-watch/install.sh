@@ -31,6 +31,14 @@ if [ "${1:-}" = --verify ]; then
   #     byte-match + enabled + active + actually scheduled (wq#4732).
   _pw_en="$(systemctl is-enabled provider-watch.timer 2>/dev/null || true)"
   _pw_act="$(systemctl is-active provider-watch.timer 2>/dev/null || true)"
+  # wq#5326: an empty answer (no bus, sandbox, a shim that exits 1 silently) is not
+  # "off" — the state is unknown, so the check could not run: ERR (exit 2), never the
+  # OFF branch's VERIFY OK. Before wq#5273 venabled reported this input as a MISS.
+  if [ -z "$_pw_en" ] || [ -z "$_pw_act" ]; then
+    echo "ERR provider-watch.timer state unknown: systemctl is-enabled='${_pw_en}' is-active='${_pw_act}' (no systemd bus?)"
+    _V_ERR=1
+    vdone
+  fi
   case "$_pw_en" in
     enabled|static|alias)
       vfile            "$HERE/provider_watch.py" "$BIN_DST"

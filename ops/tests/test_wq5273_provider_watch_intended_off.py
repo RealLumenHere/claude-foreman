@@ -37,7 +37,20 @@ def shim(enabled, active):
             '  *) exit 0 ;;\nesac\n')
 
 
-def run(args, enabled="disabled", active="inactive", payload="same", text=None, env_extra=None):
+def silent_shim(enabled, active):
+    # wq#5326: systemctl with no reachable bus / sandboxed: prints nothing, exits 1.
+    return '#!/bin/sh\necho "$@" >> "$SHIM_LOG"\nexit 1\n'
+
+
+def half_silent_shim(enabled, active):
+    # is-enabled answers, is-active prints nothing.
+    return ('#!/bin/sh\necho "$@" >> "$SHIM_LOG"\ncase "$1" in\n'
+            f'  is-enabled) echo {enabled}; exit 1 ;;\n'
+            '  *) exit 1 ;;\nesac\n')
+
+
+def run(args, enabled="disabled", active="inactive", payload="same", text=None, env_extra=None,
+        shim_fn=None):
     with tempfile.TemporaryDirectory() as tmp:
         ops = os.path.join(tmp, "ops")
         os.mkdir(ops)
@@ -59,7 +72,7 @@ def run(args, enabled="disabled", active="inactive", payload="same", text=None, 
         shims = os.path.join(tmp, "shims")
         os.mkdir(shims)
         with open(os.path.join(shims, "systemctl"), "w") as fh:
-            fh.write(shim(enabled, active))
+            fh.write((shim_fn or shim)(enabled, active))
         os.chmod(os.path.join(shims, "systemctl"), 0o755)
         log = os.path.join(tmp, "systemctl.log")
         open(log, "w").close()
@@ -100,11 +113,38 @@ class ProviderWatchIntendedOffTest(unittest.TestCase):
 
     def test_old_asserts_would_have_failed_under_same_shim(self):
         text = read(os.path.join(OPS, BUNDLE, "install.sh"))
-        old = text.replace("  vdone\n", f"  venabled {UNIT}\n  vactive {UNIT}\n  vdone\n", 1)
+        # Anchor on the top-level vdone ("\n  vdone"), not the wq#5326 guard's nested one.
+        old = text.replace("\n  vdone\n", f"\n  venabled {UNIT}\n  vactive {UNIT}\n  vdone\n", 1)
         self.assertNotEqual(old, text)
         _, out, _ = run(["--verify"], text=old)
         self.assertIn(f"not enabled: {UNIT}", out)
         self.assertIn(f"not active: {UNIT}", out)
+
+    def test_unreachable_systemctl_is_err_not_off(self):
+        # wq#5326: empty is-enabled/is-active fell into the OFF branch -> VERIFY OK rc 0.
+        rc, out, _ = run(["--verify"], payload="same", shim_fn=silent_shim)
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f"ERR {UNIT} state unknown", out)
+        self.assertIn("VERIFY ERROR", out)
+        self.assertNotIn("VERIFY OK", out)
+        self.assertNotIn(f"OFF {UNIT}", out)
+
+    def test_empty_is_active_alone_is_err(self):
+        rc, out, _ = run(["--verify"], enabled="disabled", payload="same",
+                         shim_fn=half_silent_shim)
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f"ERR {UNIT} state unknown: systemctl is-enabled='disabled' is-active=''", out)
+        self.assertNotIn("VERIFY OK", out)
+
+    def test_unreachable_systemctl_old_branch_would_pass(self):
+        # Falsifiability: strip the wq#5326 guard and the same silent shim reads as OFF/OK.
+        text = read(os.path.join(OPS, BUNDLE, "install.sh"))
+        guard = '  if [ -z "$_pw_en" ] || [ -z "$_pw_act" ]; then'
+        self.assertIn(guard, text)
+        old = text.replace(guard, "  if false; then", 1)
+        _, out, _ = run(["--verify"], text=old, payload="same", shim_fn=silent_shim)
+        self.assertIn(f"OFF {UNIT} unknown/unknown", out)
+        self.assertNotIn("state unknown", out)
 
     def test_install_refuses_without_explicit_reenable(self):
         rc, out, calls = run([])
