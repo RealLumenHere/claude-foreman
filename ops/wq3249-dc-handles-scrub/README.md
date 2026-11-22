@@ -7,4 +7,8 @@ Install: `lumen-run --root --name dcs-install -- bash ops/wq3249-dc-handles-scru
 Verify:  `bash ops/wq3249-dc-handles-scrub/install.sh --verify`
 Remove:  `systemctl disable --now dc-handles-scrub.timer`
 
+History: disabled by the 2026-10-08 subtraction, re-enabled 2026-11-22 (wq#5271) because Commander
+runs on Lumen again (wq#4921) and the store held credential-shaped rows. To turn it off again, also drop
+the `vtimer_scheduled`/`venabled`/`vactive` lines from install.sh --verify.
+
 Limit: this bounds how long a secret stays in the store. It does not stop one reaching a chat transcript.

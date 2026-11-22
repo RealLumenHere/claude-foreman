@@ -10,9 +10,13 @@ if [ "${1:-}" = --verify ]; then
   vunit_file "$SRC/dc-handles-scrub.timer"   /etc/systemd/system/dc-handles-scrub.timer
   venabled   dc-handles-scrub.timer
   vactive    dc-handles-scrub.timer
-  # wq#4910: no vtimer_scheduled for dc-handles-scrub.timer: intended-off, disabled by the
-  # 2026-10-08 subtraction (scratch/subtraction/timers-disable-phase2.txt). Re-enabling it
-  # is a decision, not a heal; whoever makes it adds vtimer_scheduled here.
+  # wq#5271: intended-ON again. The 2026-10-08 subtraction disabled it
+  # (scratch/subtraction/timers-disable-phase2.txt:3) with an explicit re-enable condition,
+  # "if DC-on-Lumen is used again" (scratch/subtraction/credential-consolidation.md:27).
+  # Commander has run on Lumen since wq#4921 (2026-11-06); on 2026-11-22 ~/.dc-handles.db
+  # was being written (WAL 09:36Z) and `dc-handles-scrub --check` found row_hits=4
+  # raw_hits=2. Re-enabled 11:07Z; first pass: rows_changed=2 raw_hits_after=0.
+  vtimer_scheduled dc-handles-scrub.timer
   vdone
 fi
 
