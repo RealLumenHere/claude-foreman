@@ -107,8 +107,10 @@ Two ways, pick the lighter one that still tells the truth:
 - **An inverted `--verify` handler** — keep the bundle, give it a handler with the
   sense inverted: assert the replacement is live and the retired names stayed
   absent, then refuse to install behind a `WQ<n>_FORCE_*` env var.
-  `wq858-trivy-weekly-scan`, `wq1299-phoenix-tracer`, `wq1396-minerva-proposal-promoter`,
+  `wq1299-phoenix-tracer`, `wq1396-minerva-proposal-promoter`,
   `wq1406-paid-fallback-guard` and `wq2500-rsshub-bridge` are the worked examples.
+  (`wq858-trivy-weekly-scan` was one until wq#4899 re-adopted the live units into the
+  bundle; it now ships them and still asserts the retired names stay absent.)
   Use this when a *regression* matters — the retired unit reappearing, or the
   replacement going quiet, is itself worth catching. Without either marker, the
   next content-index audit reads the bundle as ABSENT and files it for deploy —

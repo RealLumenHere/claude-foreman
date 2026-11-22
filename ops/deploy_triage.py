@@ -258,11 +258,12 @@ REGISTER: dict[str, dict] = {
                "second tracer on the gateway duplicates a path that has been live for the "
                "618h this sat unshipped."),
     "wq858-trivy-weekly-scan": dict(
-        disposition=SUPERSEDED, units=["lumen-trivy-weekly.timer"],
-        superseded_by="live lumen-trivy-weekly.timer", follow_up=None,
-        reason="the scan is live under a renamed unit -- lumen-trivy-weekly.timer is "
-               "enabled+active, v0.74.0 per the ticket's own notes -- while the bundle ships "
-               "trivy-scan.timer. The bundle's units are dead names, not pending work."),
+        disposition=KEEP_LIVE, units=["lumen-trivy-weekly.timer"],
+        absent_units=["trivy-scan.timer", "trivy-scan.service"], follow_up=None,
+        reason="wq#4899: the bundle now ships the live scan.sh + lumen-trivy-weekly.service/"
+               ".timer byte for byte, pinned in SHA256SUMS; --verify sha-checks pin == bundle "
+               "== live, the cron-stamp dead-man drop-in, and that the retired root variant "
+               "(trivy-scan.*, the 2026-09-28 SUPERSEDED call) stays absent."),
     "wq901-ntfy-oob-429": dict(
         disposition=KEEP_LIVE, units=["ntfy-oob-canary.timer"],
         follow_up=None,

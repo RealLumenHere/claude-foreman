@@ -1,0 +1,12 @@
+[Unit]
+Description=wq#858 Trivy weekly CVE scan — containers + host rootfs
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+ExecStart=/home/lumen/services/trivy-weekly/scan.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800

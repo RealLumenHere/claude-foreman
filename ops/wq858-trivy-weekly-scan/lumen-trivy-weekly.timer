@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#858 Trivy weekly CVE scan — Sundays 09:00 UTC
+
+[Timer]
+OnCalendar=Sun *-*-* 09:00:00
+AccuracySec=15min
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
