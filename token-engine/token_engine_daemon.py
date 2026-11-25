@@ -163,6 +163,8 @@ _KV_ENV_LABEL = (r"(?-i:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*"
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)"
                r"(?![A-Za-z][A-Za-z0-9+.\-]*://)"
+               # wq#5222: `file:` + a path is a pointer (harness/masking.py)
+               r"(?!file:[~.]{0,2}/)"
                # shell default-expansion `${FLEET_EXEC_SSH_KEY:-/path}` reads as label +
                # `:` + `-/path` now that labels go three deep (wq#2278 replay corpus);
                # no credential opens with the `:-` `:=` `:+` `:?` operator character.

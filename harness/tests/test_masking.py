@@ -168,6 +168,9 @@ KV_FALSE_POSITIVES = [
     # wq#3153: a sed substitution's pattern half, then a pointer on the replacement side
     'sed -i "s#^API_BEARER' + '_TOKEN=.*#API_BEARER' + '_TOKEN=$TOKEN#" "$REPO/.env"',
     "sed -i 's/^GITEA" + "_PASSWORD=.+/GITEA" + "_PASSWORD=${NEW}/' .env",
+    # wq#5222: tailscale's `file:` form names the key's path (wq#5122 runbook read)
+    "sudo tailscale up --auth-key=file:/root/ts-authkey --hostname=neith",
+    "auth_key: file:~/.config/ts/authkey",
 ]
 
 # and the shapes that must keep firing — a rule this narrow is only safe if it still
@@ -175,6 +178,9 @@ KV_FALSE_POSITIVES = [
 KV_REAL = [f"password: {PW}", f'"api_key": "{PW}"', f"GITEA_TOKEN={PW}",
            f"Signing Secret: {PW}", f"clientSecret: {PW}", f"apiKey: {PW}",
            f"X-Api-Key: {PW}", f"signing key = {PW}",
+           # wq#5222: only `file:` + a path is a pointer; a body that merely opens
+           # `file` or `file:` is still a value
+           f"auth-key=file{PW}", f"auth-key=file:{PW}",
            # wq#2806: the config-file shapes the survey found live and unmasked
            # (ops/wq2806-config-shape-mask/DESIGN.md). Deep env identifiers,
            f"LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: {PW}",

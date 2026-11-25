@@ -236,6 +236,11 @@ _KV_ENV_LABEL = (r"(?-i:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*"
 _KV_POINTER = (r"(?!os\.environ)(?!os\.getenv)(?!(?:process\.)?env\.)"
                r"(?!\$\{?[A-Z_])(?![~.]{0,2}/)(?!<)"
                r"(?![A-Za-z][A-Za-z0-9+.\-]*://)"
+               # wq#5222: `file:` + a path is a pointer too. `tailscale up
+               # --auth-key=file:/<path>` reads the key from that file; one `/`, so the
+               # URL guard above misses it, and a runbook line carrying it burned a
+               # value that was only a path (wq#5122).
+               r"(?!file:[~.]{0,2}/)"
                # a redaction or template placeholder, the set url-auth already refuses:
                # `***REDACTED***`, `%s`, `your-token-here`, `changeme`. Two of them sat
                # in committed diffs/digests and armed the tripwire the moment `*` joined
