@@ -104,6 +104,31 @@ block() {
   exit 2
 }
 
+# ---- wq#4830: hermetic output contract ----
+# A worker's file output goes to its own worktree (the lumen-pr path) or to its
+# per-ticket output dir /scratch/agent-work/<ticket-id>/ (FOREMAN_OUTPUT_DIR), and
+# nowhere else. Every wall above and below this one is a denylist: before wq#4830 a
+# Write to /home/lumen/.bashrc, to another ticket's worktree, or to
+# <worktree>/../../foreman/harness/x.py went through, and so did
+# `echo x >> /home/lumen/foreman/harness/guard.sh`. harness/hermetic.py holds the
+# contract (an allowlist on the RESOLVED path); this function only carries its
+# verdict. Fail-closed: any exit other than 0 blocks, including a crash of the
+# helper itself. Rollback: FOREMAN_HERMETIC=shadow (log, allow) or off (skip), set in
+# fworker's environment or in /home/lumen/foreman/hermetic.json, never from a worker.
+GUARD_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+hermetic_gate() {
+  local snippet="$1" out rc mode
+  mode=$(printf '%s' "${FOREMAN_HERMETIC:-enforce}" | tr '[:upper:]' '[:lower:]')
+  [ "$mode" = "off" ] && return 0
+  out=$(printf '%s' "$INPUT" | python3 "$GUARD_DIR/hermetic.py" hook 2>&1 >/dev/null)
+  rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -eq 2 ]; then
+    block "${out:-hermetic output contract (wq#4830)}" "$snippet"
+  fi
+  block "hermetic.py hook failed (rc=$rc), fail-closed (wq#4830): ${out:0:200}" "$snippet"
+}
+
 case "$TOOL_NAME" in
 Bash)
   RAW_CMD=$(jfield '.tool_input.command')
@@ -678,6 +703,14 @@ Bash)
   # the corpus's over-cap bytes — research/UNCAPPED_BASH.md §4). A native cap
   # truncates the assembled result instead of the pipeline, so no command shape
   # can opt out and nothing can swallow a shell-state change.
+  # wq#4830: explicit write destinations (redirects, cp/mv/tee/touch/sed -i/...) and
+  # any path that reaches the secrets dir (~/.secrets, $HOME/.secrets, a relative
+  # .secrets after `cd`, /home/lumen/.sec*), which the raw-string scans above miss.
+  hermetic_gate "$RAW_CMD"
+  ;;
+NotebookEdit)
+  # wq#4830: a file-writing tool no hook matched before. Same contract as Write/Edit.
+  hermetic_gate "$(jfield '.tool_input.notebook_path')"
   ;;
 Read|Edit|Write|Grep|Glob)
   FILE_PATH=$(jfield '.tool_input.file_path')
@@ -788,6 +821,14 @@ Read|Edit|Write|Grep|Glob)
     if [ -z "${FOREMAN_FIRE_PLAN_PATH:-}" ] || [ "$FILE_PATH" != "$FOREMAN_FIRE_PLAN_PATH" ]; then
       block "fire-mode diagnosis phase is read-only except the plan doc (wq#717): $FILE_PATH" "$FILE_PATH"
     fi
+  fi
+
+  # ---- wq#4830: hermetic output contract (Write/Edit allowlist) ----
+  # Runs after the two walls above so their more specific reasons win. What reaches
+  # here is checked on the resolved path against the ticket's writable set; the fire
+  # plan doc and Edit on kb/ISSUE-LOG.md keep their exceptions inside hermetic.py.
+  if [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "Edit" ]; then
+    hermetic_gate "$FILE_PATH"
   fi
 
   # ---- wq#730 R3/R5/R6: bound Read, suppress repeat reads, reject dead reads ----

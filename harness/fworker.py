@@ -73,6 +73,7 @@ import capability
 import capability_lint
 import capability_proposal
 import scratch_grant
+import hermetic
 import agents_spec
 import fire_gate
 import charging
@@ -2796,6 +2797,19 @@ def build_env(worker_id, model, effort, worktree, ticket_id, cli_profile=False):
     # wq#1697: the /tmp/<agent>/ dir `wq claim` tells the worker to use is created here and
     # handed to the CLI as an --add-dir (scratch_grant_dirs), so following wq is not a denial.
     env["FOREMAN_SCRATCH_DIR"] = scratch_grant.ensure_scratch(env["WQ_AGENT"])
+    # wq#4830: the hermetic output contract. Besides its worktree, the per-ticket output
+    # dir is the one place this child may write. guard.sh (hermetic.py hook) holds
+    # Write/Edit and explicit Bash destinations to that set; run_child's mount layer
+    # holds every process to it when FOREMAN_HERMETIC_MOUNT=enforce. The three mode
+    # variables are set HERE, from fworker's own env and FOREMAN_ROOT/hermetic.json, so
+    # the child always carries an explicit value. EXTRA_WRITE is dropped: nothing in
+    # the harness widens the set today, and an inherited value must not either.
+    env["FOREMAN_OUTPUT_DIR"] = hermetic_output_dirs(ticket_id)[0]
+    try:
+        env.update(hermetic.settings(env))
+    except hermetic.HermeticError as e:
+        raise SpawnRefused("HERMETIC_CONFIG", str(e))
+    env.pop("FOREMAN_HERMETIC_EXTRA_WRITE", None)
     # wq#900: registered primary trees for guard.sh's branch-freeze deny class —
     # computed here (router.LANE_REPO + static mirror) so the guard never depends
     # on an import at hook time.
@@ -2875,6 +2889,17 @@ def add_dirs_for(archetype, needs_dirs=None, repo=None):
     if repo and repo not in out:
         out.append(repo)
     return out
+
+def hermetic_output_dirs(ticket_id):
+    """wq#4830: this ticket's output dir (/scratch/agent-work/<ticket-id>/), created,
+    as an --add-dir. A dir that cannot be made, or that resolves somewhere else, refuses
+    the spawn uncharged: a worker with nowhere sanctioned to write would only burn its
+    attempt on denials."""
+    try:
+        return [hermetic.ensure_output_dir(ticket_id)]
+    except (hermetic.HermeticError, OSError) as e:
+        raise SpawnRefused("HERMETIC_OUTPUT_DIR", str(e))
+
 
 def scratch_grant_dirs(ticket_id):
     """wq#1697: the wq scratch dir for this ticket's owner identity, as an --add-dir."""
@@ -3674,6 +3699,17 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     # session/process group so a signal delivered to fworker's process group (e.g. an
     # interactive connector recycle killing the whole group) does not take the `claude`
     # child down with it — the same detach discipline dispatch-batch applies one level up.
+    # wq#4830: the mount layer. Off unless FOREMAN_HERMETIC_MOUNT=enforce, in which case
+    # the child (claude, sdk or aider: they all spawn here) runs under bubblewrap with
+    # the filesystem read-only outside the ticket's writable set and the secrets dir
+    # empty. bwrap stays in this session and process group, so the kill paths below
+    # are unchanged. A sandbox that cannot be built is a failed spawn, never a spawn
+    # without the sandbox.
+    try:
+        cmd = hermetic.wrap(cmd, cwd, env, run_dir=run_dir(ticket_id))
+    except hermetic.HermeticError as e:
+        log(f"wq#{ticket_id} attempt {attempt}: hermetic mount refused the spawn: {e}")
+        return RunState(), 1, [{"type": "hermetic_error", "error": str(e)}], None, 0.0, None
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -4713,6 +4749,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     ticket_needs = needs_mod.parse(ticket.get("needs"), ticket.get("detail", ""))
     add_dirs = add_dirs_for(archetype, ticket_needs.dirs, repo=args.repo)
     add_dirs += [d for d in scratch_grant_dirs(ticket_id) if d not in add_dirs]
+    add_dirs += [d for d in hermetic_output_dirs(ticket_id) if d not in add_dirs]  # wq#4830
     # wq#4765 (§2.4 point 1, "Claude layer"): a grant-approved resume's H1 grant widens
     # add_dirs by exactly the approved target directory — read from the ticket's own
     # grant_req row, never re-derived, so this spawn can only ever see what was actually
@@ -5748,6 +5785,7 @@ def record_terminal_failure(ticket_id, attempt, classification, state, events,
         # wrongly re-propose the tag the ticket already carried.
         reachable = [worktree] + list(add_dirs_for(archetype or "standard-engineering",
                                                     needs_dirs)) + scratch_grant_dirs(ticket_id)
+        reachable.append(hermetic.output_dir(ticket_id))   # wq#4830
     except Exception:
         reachable = [worktree]
     rec = failure_record.build_failure_record(

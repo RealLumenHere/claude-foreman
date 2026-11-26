@@ -1138,10 +1138,17 @@ def test_primary_tree_write_edit_env_override_respected():
         "Edit", {"file_path": "/srv/custom-primary/f.py", "old_string": "a", "new_string": "b"},
         env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"})
     assert rc == 2 and "wq#1719" in stderr, stderr
+    # wq#4830: the override still decides what the wq#1719 wall covers (contract off:
+    # allowed), but with the hermetic contract on the same Edit is now refused by the
+    # allowlist, since a path being off the primary list no longer makes it writable.
     rc, _ = run_guard(
         "Edit", {"file_path": f"{PRIMARY}/f.py", "old_string": "a", "new_string": "b"},
-        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"})
+        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary", "FOREMAN_HERMETIC": "off"})
     assert rc == 0
+    rc, stderr = run_guard(
+        "Edit", {"file_path": f"{PRIMARY}/f.py", "old_string": "a", "new_string": "b"},
+        env_extra={"FOREMAN_PRIMARY_TREES": "/srv/custom-primary"})
+    assert rc == 2 and "wq#4830" in stderr and "wq#1719" not in stderr, stderr
 
 
 # ---- wq#1752 (ISSUE-LOG #302, wq#1733 contradiction): kb + shallow nest archive ----

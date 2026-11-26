@@ -158,3 +158,10 @@ def _no_live_ntfy(monkeypatch):
         return
     monkeypatch.setattr(mask_at_rest, "page_alarm", lambda unaccounted, run_id: None)
 
+
+@pytest.fixture(autouse=True)
+def _hermetic_output_root_off_prod(tmp_path_factory, monkeypatch):
+    """wq#4830: fworker.build_env creates the per-ticket output dir. Point its root at
+    the run's tmp dir so no test leaves /scratch/agent-work/<fixture id>/ behind."""
+    monkeypatch.setenv("FOREMAN_OUTPUT_ROOT",
+                       str(tmp_path_factory.getbasetemp() / "agent-work"))

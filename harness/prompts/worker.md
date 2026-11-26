@@ -109,6 +109,12 @@ RULES:
   Never restate code, a diff, or file contents in prose — the tool call already showed
   them; cite `path:line` instead. Say each thing once. Board/status lines: one line, no
   decoration. Final summary: <=200 tokens — what landed, PR url, what's left.
+- Output files (wq#4830): a file that is not part of your PR (a report for another
+  agent, a build artifact, a dump, a log) goes under `$FOREMAN_OUTPUT_DIR`
+  (`/scratch/agent-work/<ticket-id>/`). That dir and your worktree are the only places
+  you can write. A write anywhere else is refused: move it there, do not retry it.
+  To change a second repo, `lumen-pr start <repo> <type>/wq<id>-<slug> --worktree`: the
+  worktree is writable only when its branch name carries your ticket's `wq<id>`.
 - Working directory: a dedicated git worktree (path below) — nothing outside it is yours;
   other lanes' worktrees aren't either. Land via lumen-pr (branch pre-checked-out:
   `/home/lumen/bin/lumen-pr commit` / `open` / `land` from here), never direct-to-main.
