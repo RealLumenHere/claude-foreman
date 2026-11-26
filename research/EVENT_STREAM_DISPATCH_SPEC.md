@@ -8,6 +8,121 @@ Implementation tickets: one per phase, filed by this session (section 9).
 
 ## 0. Verified state on Lumen, 2026-11-05 (read-only probes)
 
+### Phase 0 decisions (wq#4892, agent-4892-2fcd7e, 2026-11-25 PST)
+
+Design only: no code, no unit, no timer touched. Based on read-only probes on
+Lumen, 2026-11-25 22:20-22:45 PST. Where this block and sections 2-10
+disagree, this block wins.
+
+| # | question | decision | Frank gate |
+|---|---|---|---|
+| D1 | tick host (3.9) | (a) `ExecStartPost` on `lumen-fleet-selfheal.service`. No `lumen-events.timer`. | YES, at wiring time only (G1 below) |
+| D2 | events.db location | `/home/lumen/agents/work-queue/events.db`, as proposed | none |
+| D3 | test fixture | Reuse the CAL-1 scratch-queue contract (real `bin/wq` + `WQ_DB` under a tmp root). Do not reuse the scratch git repo or the matrix runner in Phase 1. | none |
+| D4 | package path (found in passing) | `foreman/events/` is taken. Code goes in `foreman/eventstream/`. | none; wq#4893 detail and liveness still name the old path |
+
+**Corrections to the table below (verified live)**
+- fleet-selfheal fires every 1 min, not 5: `lumen-fleet-selfheal.timer`
+  OnUnitActiveSec=1min, AccuracySec=10s, live unit identical to
+  ops/wq3354-fleet-selfheal (1min since its first commit a34608e7, 2026-10-01).
+- The service is `User=root`, Type=oneshot, TimeoutStartSec=900, MemoryMax=512M,
+  Nice=10, and already carries `ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n`.
+  Sweep wall time 2-4 s in the passes sampled, one pass at 28 s.
+- `lumen-foreman-dispatch.timer` is disabled/inactive today; the live broker is
+  `lumen-auto-dispatch.timer` (2 min, User=lumen).
+- `/home/lumen/foreman/events/` already exists (see D4).
+
+**D1 tick host: selfheal ExecStartPost**
+- Zero new timers. Option (b) existed only for sub-5-minute reaction; the host
+  already runs every minute, so (b) buys nothing.
+- Selfheal is always on. It does not honour DISPATCH_DISARM / DISPATCH_PAUSE, and
+  the event record must keep filling while dispatch is disarmed (the stream's
+  point is the record of what did NOT become a ticket). That rules out hosting
+  the tick on auto-dispatch or foreman-dispatch.
+- Selfheal is the first producer cut over (7.1), so its findings and the tick
+  share one pass.
+
+Binding constraints for the phases that build and wire it:
+1. Line shape, placed AFTER the existing cron-stamp line:
+   `ExecStartPost=-/usr/sbin/runuser -u lumen -- /usr/bin/timeout 40 /usr/bin/python3 /home/lumen/foreman/eventstream/events_tick.py`
+   - `-` prefix: a tick failure never fails the selfheal unit.
+   - after the stamp: a slow tick cannot delay selfheal's own dead-man stamp.
+   - `runuser -u lumen`: the unit is root; wq's sqlite and events.db must never
+     get root-owned WAL/SHM files (same rule as `selfheal_common.as_lumen()`).
+   - `timeout 40`: a oneshot stays activating through ExecStartPost, so the next
+     1-minute sweep waits on the tick. The cap bounds that delay.
+2. Budgets in 3.4 and 3.6 were sized for a 5-minute host. New values: whole tick
+   30 s internal wall budget (hard kill at 40 s), `wq add` subprocess timeout
+   20 s, sweep LIMIT stays 100 but stops at the budget. Leftover rows are picked
+   up one minute later.
+3. The 300 s event_id bucket in 3.2 stays, as a dedupe window. It is no longer
+   "the selfheal cadence". Schedule granularity (3.8) becomes 1 minute.
+4. The tick writes its own dead-man stamp (`lumen-cron-stamp lumen-events-tick`)
+   after a completed pass; the selfheal stamp says nothing about the tick. How
+   lumen-cron-deadman enumerates stamps was NOT verified here: the wiring ticket
+   checks it.
+5. Kill switch: latch file `/home/lumen/autonomy/EVENTSTREAM_DISARM`, beside the
+   DISPATCH_DISARM default path (dispatcher/circuit_breaker.py:66). Renamed from
+   FOREMAN_EVENTS_DISARM so it cannot be confused with FOREMAN_EVENTS_DIR.
+6. Wiring is NOT part of Phase 1. Phase 1 lands code and tests and ticks by hand
+   (`events_cli tick --once --shadow`). The unit edit is its own ops ticket:
+   change ops/wq3354-fleet-selfheal/lumen-fleet-selfheal.service by PR, root
+   `install.sh`, then `install.sh --verify`. It is a root apply that sandboxed
+   fworkers cannot run (wq#4940 / wq#5114 history). Rollback: reinstall the
+   previous unit file, `systemctl daemon-reload`.
+
+G1 FRANK GATE (wiring only): editing a root-run fleet-safety unit is Frank's
+call, and section 10 question 1 already asks him. Recommendation: approve (a)
+with constraints 1-6. Phase 1 (wq#4893) does not wait on it.
+
+**D2 events.db: /home/lumen/agents/work-queue/events.db**
+- The directory is lumen:lumen and already holds queue.db; WORKTREE_DELETE_SAGA.md
+  puts worktree_saga.db there too. One place for wq-adjacent state, separate
+  files so bin/wq stays sole owner of queue.db's schema.
+- Backed up with no script change: backup-critical.sh section 5b (wq#3693) runs
+  an online `.backup` of every `*.db` under /home/lumen/agents (maxdepth 3).
+- Root LV has 153G free (66% used). /scratch is RAID0 (md1, assemble-only) and
+  is wrong for state that needs queue.db-class durability.
+
+Constraints: path overridable by env `FOREMAN_EVENTSTREAM_DB` (tests; mirrors
+WQ_DB). File created 0600 lumen:lumen, because payloads are raw-ish provider
+bodies. Opened only as lumen. Schema applied idempotently on first open. The
+spec has no retention rule: Phase 1 adds a prune in the tick for settled
+events and runs older than 90 days, which keeps the file small on the root LV.
+
+**D3 test fixture: reuse the scratch queue, not the scratch repo**
+What exists: harness/cal1_fixture.py (wq#619) `build|reset --root DIR` makes
+scratch_repo + scratch_wq.db + events/_runs/worktrees and exports them through
+`scratch_env()`; harness/tests/test_fworker_integration.py has the pytest
+tmp_path version (`make_scratch_repo`, `make_scratch_env`, zero quota).
+- This layer never touches git and never spawns a worker (section 6). Its only
+  external effect is `wq add`. The part worth reusing is the scratch queue: the
+  real /home/lumen/bin/wq with `WQ_DB=<tmp>/scratch_wq.db` (bin/wq:101).
+- Phase 1 tests get their own conftest in foreman/eventstream/tests, per-test
+  tmp_path, setting WQ_DB, WQ_AGENT, FOREMAN_EVENTSTREAM_DB,
+  FOREMAN_NTFY_BIN=/bin/true, FOREMAN_JUDGE_SHADOW=0 and FLEET_SELFHEAL_WQ. Same
+  key names as `cal1_fixture.scratch_env()` so a later end-to-end run can share
+  one root. No import from harness/: its autouse conftest fixtures and 20-minute
+  suite stay out of this package's test run.
+- Guard: the conftest refuses to run when realpath of WQ_DB or the events db is
+  under /home/lumen/agents/work-queue.
+- NOT verified: whether `wq add` has side effects (aq, ntfy) that ignore WQ_DB.
+  Only `_aq_unverified` (bin/wq:3074) was confirmed live-queue-only. Phase 1
+  checks this before its first test that calls `wq add`.
+- The full CAL-1 fixture (`cal1_fixture.py build --root`) is held for the
+  Phase 2+ end-to-end case (event -> ticket -> fworker). `run-matrix` is never
+  used here: it spends real quota.
+
+**D4 package path: foreman/eventstream/**
+`/home/lumen/foreman/events/` is the live fworker / action_gate JSONL directory
+(FOREMAN_EVENTS_DIR default, harness/fworker.py:111, harness/action_gate.py:49),
+owned tokeneng:token-client with ACLs, and `/events/` is in .gitignore line 5.
+Code placed there cannot be committed. Every `foreman/events/...` code path in
+sections 3.1, 3.3, 3.9 and 9 reads `foreman/eventstream/...`. The JSONL log
+path (section 5) and the db filename are unchanged. wq#4893 must be read with
+the new path; its liveness probe (`test -f foreman/events/pipeline.py`) needs
+the same edit before that ticket can close.
+
 | component | today | verified by |
 |---|---|---|
 | dispatch | lumen-foreman-dispatch.timer: OnBootSec=10min, OnUnitActiveSec=20min -> `dispatcher/foreman_dispatcher.py run --once`; stateless pass, scans OPEN tickets, spawns detached fworkers; never claims, never files | systemctl cat, module docstring |
