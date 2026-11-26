@@ -44,6 +44,8 @@ import masking  # noqa: E402  (wq#2275: transcript masking at read time)
 # v3 (wq#5118): adds `route` (where the ticket goes next; "frank_gated" for a
 # CLASSIFIER_DENIED run, else None) and an `action` key on classifier-denied
 # denied_calls rows. Additive again.
+# wq#5143 keeps v3: one more triage value (UNCHECKABLE) with its own frank_gated route,
+# written pre-spawn by build_uncheckable_record(). Every v3 key keeps its meaning.
 SCHEMA_VERSION = 3
 FAILURE_FILENAME = "failure.json"
 
@@ -54,15 +56,20 @@ TRIAGE_REAL_BLOCK = "REAL_BLOCK"
 TRIAGE_LIMIT = "LIMIT"
 TRIAGE_UNKNOWN = "UNKNOWN"
 TRIAGE_CLASSIFIER_DENIED = "CLASSIFIER_DENIED"
-TRIAGE_VALUES = (TRIAGE_CLASSIFIER_DENIED, TRIAGE_CAPABILITY_DENIED,
+TRIAGE_UNCHECKABLE = "UNCHECKABLE"  # wq#5143: no machine-checkable acceptance, pre-spawn
+TRIAGE_VALUES = (TRIAGE_CLASSIFIER_DENIED, TRIAGE_UNCHECKABLE, TRIAGE_CAPABILITY_DENIED,
                  TRIAGE_HARNESS_DEFECT, TRIAGE_GENUINE_BUG,
                  TRIAGE_REAL_BLOCK, TRIAGE_LIMIT, TRIAGE_UNKNOWN)
 
-# wq#5118: where a terminal failure goes next. Only CLASSIFIER_DENIED has a route of its
-# own — Frank's decision queue (frank_gated -> pending_review), because the same action
-# gets the same refusal on a retry. Every other class keeps the ordinary block path.
+# wq#5118: where a terminal failure goes next. CLASSIFIER_DENIED has a route of its own —
+# Frank's decision queue (frank_gated -> pending_review), because the same action gets
+# the same refusal on a retry. wq#5143: so does UNCHECKABLE — a ticket with no
+# machine-checkable done would otherwise close on prose, and no retry changes that; only
+# a rewritten ticket (a runnable check) or Frank's explicit ack does. Every other class
+# keeps the ordinary block path.
 ROUTE_FRANK_GATED = "frank_gated"
-TRIAGE_ROUTES = {TRIAGE_CLASSIFIER_DENIED: ROUTE_FRANK_GATED}
+TRIAGE_ROUTES = {TRIAGE_CLASSIFIER_DENIED: ROUTE_FRANK_GATED,
+                 TRIAGE_UNCHECKABLE: ROUTE_FRANK_GATED}
 
 
 def route_for(verdict):
@@ -80,8 +87,10 @@ def route_for(verdict):
 # signals for the cell. Same reasoning as the local-rung escalation skip in
 # fworker.handle_failure() — "a different model can't help here".
 # wq#5118: CLASSIFIER_DENIED joins them — a permission decision no model gets past.
+# wq#5143: UNCHECKABLE too — a property of the ticket text; no model ran.
 TRIAGE_NON_COMPETENCE = frozenset({TRIAGE_REAL_BLOCK, TRIAGE_CAPABILITY_DENIED,
-                                   TRIAGE_HARNESS_DEFECT, TRIAGE_CLASSIFIER_DENIED})
+                                   TRIAGE_HARNESS_DEFECT, TRIAGE_CLASSIFIER_DENIED,
+                                   TRIAGE_UNCHECKABLE})
 
 LUMEN_STATE = os.environ.get("FOREMAN_LUMEN_STATE",
                              "/home/lumen/minerva/lumen_state.py")
@@ -614,7 +623,7 @@ def triage(classification, trip_kind, denied_calls, unreachable_paths,
     if worker_block_reason:
         return TRIAGE_REAL_BLOCK, worker_block_reason.strip().splitlines()[0][:200]
 
-    if classification in ("TURNS", "BUDGET"):
+    if classification in ("TURNS", "BUDGET", "WORKER_LIMIT"):  # wq#5144: STOP: 3
         return TRIAGE_LIMIT, f"{classification} ceiling hit"
 
     web = needs_web_signal(events)
@@ -699,6 +708,31 @@ def build_failure_record(ticket, attempts, classification, block_class,
         "transcript": (f"~/.claude/projects/*/{session_id}.jsonl"
                        if session_id else None),
         "attempt_files": attempt_files or [],
+    }
+
+
+def build_uncheckable_record(ticket, attempts, reason, archetype=None):
+    """wq#5143: the pre-spawn record for a ticket with no machine-checkable acceptance.
+    Nothing ran — no transcript, no denied calls — but the shape is every v3 key, so
+    block_reason_line() and replay() read it unchanged."""
+    return {
+        "schema": SCHEMA_VERSION,
+        "ticket": ticket,
+        "attempts": attempts,
+        "classification": TRIAGE_UNCHECKABLE,
+        "block_class": "WORK_BLOCKED",
+        "triage": TRIAGE_UNCHECKABLE,
+        "route": route_for(TRIAGE_UNCHECKABLE),
+        "summary": reason,
+        "archetype": archetype,
+        "denied_calls": [],
+        "inferred_needs": [],
+        "worktree": {"path": None, "origin": None, "expected_repo": None, "match": None},
+        "unreachable_paths": [],
+        "refused": [],
+        "last_error_sig": None,
+        "transcript": None,
+        "attempt_files": [],
     }
 
 

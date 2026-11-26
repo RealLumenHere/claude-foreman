@@ -27,6 +27,7 @@ import acceptance  # noqa: E402
 import classifier  # noqa: E402 -- wq#1915(A): parse_worker_sentinel + sentinel set
 import exit_gate  # noqa: E402 -- wq#5007: dual-condition exit gate
 import park  # noqa: E402 -- wq#5009: park-and-resume decision cards
+import stop_code  # noqa: E402 -- wq#5144: worker stop-code contract
 
 MAX_BLOCKS = 3
 WQ_BIN = os.environ.get("FOREMAN_WQ_BIN", "/home/lumen/bin/wq")
@@ -152,6 +153,13 @@ def _exit_gate_block(hook_input, ticket_id, done, worktree, transcript_path):
         return None
     sentinel = classifier.parse_worker_sentinel(text)
     if sentinel in (classifier.BLOCK_SENTINEL, classifier.CLAIM_ERROR_SENTINEL):
+        return None
+    # wq#5144: a declared limit (STOP: 3) or needs-answer stop (STOP: 4) is a legitimate
+    # non-completion that fworker routes itself (limit path / one card request, then
+    # Frank). STOP: 2 (unfinished) stays gated: "keep working" is still the right
+    # answer to a worker that could carry on (wq#5007).
+    if (stop_code.mode() == "enforce"
+            and stop_code.parse(text)[0] in (stop_code.LIMIT, stop_code.NEEDS_ANSWER)):
         return None
     if not done and _ticket_status(ticket_id) != "claimed":
         return None

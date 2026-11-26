@@ -145,7 +145,8 @@ def rewrite_text(error):
             f"```{FENCE} block: one JSON object "
             '{"ask": {"title": "...", "text": "...", "options": ["...", "..."], '
             '"recommend": "<one of options>"}}'
-            f" followed by the lines `EXIT_SIGNAL: false` and `{PARKED_SENTINEL}`. If you "
+            f" followed by the lines `STOP: 4`, `EXIT_SIGNAL: false` and "
+            f"`{PARKED_SENTINEL}`. If you "
             "no longer need a decision, carry on with the ticket instead.")
 
 

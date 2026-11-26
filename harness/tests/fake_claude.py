@@ -251,6 +251,41 @@ def main():
         emit({"type": "result", "subtype": "success", "is_error": False,
               "total_cost_usd": 0.001, "num_turns": 2, "result": text})
 
+    elif scenario in ("stop_cant_run", "stop_unfinished_then_done", "stop_limit",
+                      "stop_needs_answer_no_card", "stop_needs_answer_card_on_ask"):
+        # wq#5144 stop-code contract: clean result:success frames whose ONLY routing
+        # signal is the worker's `STOP: <n>` line (no `wq block`, no `wq release`), so a
+        # test proves fworker routes on the code rather than on inference.
+        prompt_text = argv[1] if len(argv) > 1 and argv[0] == "-p" else ""
+        spawn_log = os.environ.get("FAKE_CLAUDE_SPAWN_LOG")
+        if spawn_log:
+            with open(spawn_log, "a") as f:
+                f.write(("resume" if resume else "fresh") + "\n")
+        emit({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}})
+        card = ('```foreman-park\n{"ask": {"title": "Which vendor?", '
+                '"text": "Two quotes, both in budget.", '
+                '"options": ["vendor A", "vendor B"], "recommend": "vendor A"}}\n```')
+        if scenario == "stop_cant_run":
+            text = "the cited device is gone, nothing to run against\nSTOP: 1\nEXIT_SIGNAL: false"
+        elif scenario == "stop_unfinished_then_done":
+            if resume:
+                if ticket_id:
+                    subprocess.run([WQ_BIN, "done", str(ticket_id), "--notes",
+                                     "fake worker done on resume, see README.md"],
+                                    capture_output=True, text=True)
+                text = "finished, see README.md\nSTOP: 0\nEXIT_SIGNAL: true\nTICKET_CLOSED"
+            else:
+                text = "half way, more remains\nSTOP: 2\nEXIT_SIGNAL: false"
+        elif scenario == "stop_limit":
+            text = "context nearly full, stopping\nSTOP: 3\nEXIT_SIGNAL: false"
+        elif (scenario == "stop_needs_answer_card_on_ask"
+                and "STOP CODE 4 WITHOUT A DECISION CARD" in prompt_text):
+            text = "need a vendor decision\n" + card + "\nSTOP: 4\nEXIT_SIGNAL: false\nPARKED"
+        else:
+            text = "need Frank to pick the vendor\nSTOP: 4\nEXIT_SIGNAL: false\nPARKED"
+        emit({"type": "result", "subtype": "success", "is_error": False,
+              "total_cost_usd": 0.001, "num_turns": 2, "result": text})
+
     elif scenario == "denied_verb_blocked":
         rc = fire_hook("Bash", {"command": "docker compose down --remove-orphans"},
                         session_id, effort)

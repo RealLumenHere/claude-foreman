@@ -59,6 +59,7 @@ from classifier import (
     TURNS, LAUNCH_FAILURE, KILLED, BUDGET, BLOCK_SENTINEL, CLAIM_ERROR_SENTINEL,
     TICKET_CLOSED_SENTINEL,
     PERMISSION_LOOP, MODEL_NOT_FOUND, AUTH_DENIED,
+    UNFINISHED, WORKER_LIMIT,  # wq#5144
 )
 from oom_forensics import oom_journal_evidence
 import acceptance as acceptance_mod
@@ -67,6 +68,7 @@ import hallucination_guard
 import action_gate
 import exit_gate  # noqa: E402 -- wq#5007
 import park as park_mod  # noqa: E402 -- wq#5009
+import stop_code  # noqa: E402 -- wq#5144 worker stop-code contract
 import failure_record
 import needs as needs_mod
 import capability
@@ -521,7 +523,7 @@ BLOCK_HARNESS_DEFECT = "HARNESS_DEFECT"
 # fleet really is down), self_heal's ordinary release-on-attempts-remaining rule
 # still applies, and its own extra re-arm logic is additive, not a replacement.
 _INFRA_CRASH_CLASSIFICATIONS = {LAUNCH_FAILURE, KILLED, OOM, AUTH_DENIED}
-_LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET}
+_LIMIT_HIT_CLASSIFICATIONS = {TURNS, BUDGET, WORKER_LIMIT}  # wq#5144: STOP: 3
 _HARNESS_DEFECT_CLASSIFICATIONS = {PERMISSION_LOOP, MODEL_NOT_FOUND}
 
 
@@ -925,6 +927,9 @@ def wq_await_grant(ticket_id, req_id, session_id):
 
 EXIT_PARKED = 27  # wq#5009: the round parked on a decision card for Frank — uncharged,
 #                   no process and no tokens until the answer; the SAME session resumes.
+EXIT_FRANK_GATED = 28  # wq#5143/wq#5144: moved to Frank's decision queue (frank_gated ->
+#                        pending_review): an UNCHECKABLE ticket before any spawn, or a
+#                        STOP: 4 that sent no usable card. Uncharged; the slot is free.
 
 
 def park_card_of(state, prompt, aider_runtime):
@@ -4781,6 +4786,15 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # number here that the original deferred attempt used (that attempt never wrote
     # attempt-N.json — EXIT_AWAITING_GRANT is uncharged), so the worktree the deferred
     # call ran in is adopted, not recreated.
+    # wq#5143: a ticket with nothing machine-checkable goes to Frank BEFORE a worktree or
+    # a token is spent, instead of an ungated run that closes on its own prose. Fresh
+    # attempts only: a resume continues a session that already passed this gate.
+    derived_acceptance = None
+    if not prior_worktree and not resume_session:
+        derived_acceptance, gated = uncheckable_gate(
+            ticket_id, dict(ticket, archetype=archetype), attempt)
+        if gated is not None:
+            return gated
     if prior_worktree:
         worktree, branch = prior_worktree, None
     else:
@@ -4808,7 +4822,7 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # §1a: criteria are machine-checkable and pinned BEFORE the worker starts, so the
     # prompt can carry the done-contract and the Stop hook has something to enforce.
     acceptance_doc = pin_acceptance(ticket_id, dict(ticket, archetype=archetype),
-                                     worktree, attempt)
+                                     worktree, attempt, derived=derived_acceptance)
     # §1d: only a LIVE rejection renders — rework.json outlives the rejection it
     # describes (it is kept as the run's history), the marker does not.
     rework = (acceptance_mod.read_json(
@@ -4970,6 +4984,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         if outcome is not None:
             return outcome
     park_ask, park_err = park_card_of(state, prompt, aider_runtime)  # wq#5009
+    # wq#5144: the worker's own stop code, read once. Routed on only for a session whose
+    # prompt carried the contract, and (codes 1-3) only on a clean exit.
+    stop_enforced = (stop_code.mode() == "enforce" and not aider_runtime
+                     and stop_code.PROTOCOL_MARKER in (prompt or ""))
+    stop = stop_code.parse(state.result_text)[0] if stop_code.mode() != "off" else None
     gate_loop = exit_gate_after_loop(ticket_id, worktree, gate_base, events, state,
                                      killed_reason, parked=bool(park_ask))  # wq#5007
     if (park_resume and resume_session and not state.session_id
@@ -4996,6 +5015,20 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
                               prior_worktree=worktree,
                               ceiling_spent=loop_tracker.ceiling_spent,
                               exit_nudge=park_mod.rewrite_text(park_err))
+        elif stop_enforced and stop == stop_code.NEEDS_ANSWER:
+            # wq#5144: code 4 maps to the park card. No card at all gets ONE request for
+            # one (same session, same attempt); still none (or still unusable after its
+            # rewrite) and the question goes to Frank as the worker put it.
+            if not exit_nudge and park_mod.enabled():
+                log(f"wq#{ticket_id}: STOP: 4 with no decision card — asking the session "
+                    f"for one")
+                return do_attempt(args, attempt, resume_session=state.session_id,
+                                  prior_worktree=worktree,
+                                  ceiling_spent=loop_tracker.ceiling_spent,
+                                  exit_nudge=stop_code.card_missing_text())
+            outcome = frank_gate_stop_needs_answer(ticket_id, state)
+            if outcome is not None:
+                return outcome
     if state.stop_reason == "tool_deferred":
         # wq#4765 (§2.3 steps 2-3): the turn ended on a PreToolUse `defer`, clean exit
         # (killed_reason is None here — the CLI itself stopped the turn, no watchdog
@@ -5155,6 +5188,32 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     elif sentinel_confirmed_claim_error:
         classification = CLAIM_ERROR_SENTINEL
 
+    # wq#5144: STOP: 1/2/3 on a clean exit route on the worker's code, not on inference.
+    # Each only makes the harness more conservative (no done, no close): 0 still goes
+    # through every verification below, 4 was handled at the park step above, and a
+    # harness-observed failure (not SUCCESS/DEGRADED_SUCCESS here) always wins.
+    if (stop_enforced and classification in (SUCCESS, DEGRADED_SUCCESS)
+            and stop in (stop_code.CANT_RUN, stop_code.UNFINISHED, stop_code.LIMIT)):
+        if stop == stop_code.CANT_RUN:
+            if wq_show(ticket_id).get("status") != "blocked":
+                wq_block(ticket_id, stop_code.block_reason(state.result_text))
+            sentinel_status = wq_show(ticket_id).get("status")
+            if sentinel_status == "blocked":
+                sentinel_confirmed_block = True
+                classification = BLOCK_SENTINEL
+            else:
+                log(f"WARN wq#{ticket_id}: STOP: 1 but the ticket could not be blocked "
+                    f"(status={sentinel_status!r}) — ordinary verification path")
+        elif stop == stop_code.UNFINISHED:
+            classification = UNFINISHED
+            # more work remains by the worker's own word: a commit naming the ticket
+            # must not close it (the wq#5007 EXIT_SIGNAL: false guard).
+            state.exit_gate_explicit_false = True
+        else:
+            classification = WORKER_LIMIT
+        log(f"wq#{ticket_id}: STOP: {stop} ({stop_code.NAMES[stop]}) -> {classification} "
+            f"(wq#5144 stop-code route)")
+
     # RELIABILITY_SPEC.md §C10: verify acceptance criteria against artifacts BEFORE
     # anything downstream (including the persisted attempt record) trusts a self-
     # reported success — decided here, not inside reconcile(), so the record on disk
@@ -5276,6 +5335,10 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         "oom_journal": oom_journal,
         "killed_reason": killed_reason, "loop_reason": loop_tracker.tripped,
         "exit_gate": gate_info,  # wq#5007
+        "stop_code": (stop_code.record(
+            state.result_text, exit_signal=exit_gate.parse_exit_signal(state.result_text),
+            has_card=park_mod.find_card_block(state.result_text) is not None,
+            enforced=stop_enforced) if stop_code.mode() != "off" else None),  # wq#5144
         "turns": state.turns,
         "session_id": state.session_id, "resumed_from": resume_session,
         "saw_limit": state.saw_limit, "latest_resets_at": state.latest_resets_at,
@@ -5456,7 +5519,7 @@ def _acceptance_model_call():
     return call
 
 
-def pin_acceptance(ticket_id, ticket, worktree, attempt):
+def pin_acceptance(ticket_id, ticket, worktree, attempt, derived=None):
     """§1a: render the ticket's machine-checkable criteria into the worktree and pin
     them by hash in the fworker-owned run dir before the worker starts. Re-pinning on a
     later attempt reuses the ORIGINAL doc — the goalposts do not move between attempts,
@@ -5467,6 +5530,8 @@ def pin_acceptance(ticket_id, ticket, worktree, attempt):
         return None
     rd = run_dir(ticket_id)
     doc = acceptance_mod.pinned_doc(rd)
+    if not doc and derived is not None:
+        doc = derived  # wq#5143: the doc uncheckable_gate() already judged
     if not doc:
         try:
             doc = acceptance_mod.derive(dict(ticket, id=ticket_id),
@@ -5741,7 +5806,7 @@ def reconcile(args, ticket_id, attempt, classification, state, events, worktree,
         return handle_failure(args, ticket_id, attempt, classification, state, events,
                                worktree, charged_to=charged_to, failure_cause=failure_cause)
 
-    if classification in (FALSE_COMPLETE, INDETERMINATE, AUTH, HANG):
+    if classification in (FALSE_COMPLETE, INDETERMINATE, AUTH, HANG, UNFINISHED):
         return handle_resumable_failure(args, ticket_id, attempt, classification, state,
                                          events, worktree)
 
@@ -5999,6 +6064,122 @@ def handle_rung_fault(args, ticket_id, attempt, classification, cause, state, ev
     ntfy("foreman RUNG_FAULT", f"wq#{ticket_id}: {classification}/{cause} on {backend} "
          f"(attempt not charged)")
     return EXIT_RUNG_FAULT
+
+
+def frank_gate(ticket_id, prompt, rec, why):
+    """wq#5143/wq#5144: frank_gate_classifier_denial()'s ordering for any question —
+    release clears the claim, then frank_gated (unclaimable), then `wq decide` files the
+    question (-> pending_review). True once the row is frank_gated and unclaimed; a
+    failed `decide` after that is only logged. False = nothing gated, caller decides."""
+    wq_release(ticket_id)
+    p = wq("edit", str(ticket_id), "--status", "frank_gated",
+           "--gate-type", "frank_decision")
+    after = wq_show(ticket_id)
+    if p.returncode != 0 or after.get("status") != "frank_gated" or after.get("claimed_by"):
+        log(f"WARN wq#{ticket_id}: frank-gate did not take (status="
+            f"{after.get('status')!r}, claimed_by={after.get('claimed_by')!r}): "
+            f"{((p.stdout or '') + (p.stderr or '')).strip()[-200:]}")
+        return False
+    p = wq("decide", str(ticket_id), "--prompt", prompt, "--rec", rec, "--no-probe", why)
+    if p.returncode != 0:
+        log(f"WARN wq#{ticket_id}: wq decide failed, row stays frank_gated: "
+            f"{((p.stdout or '') + (p.stderr or '')).strip()[-200:]}")
+    return True
+
+
+UNCHECKABLE_MODE_ENV = "FOREMAN_UNCHECKABLE_GATE"  # enforce (default) | shadow | off
+
+
+def uncheckable_mode():
+    m = (os.environ.get(UNCHECKABLE_MODE_ENV) or "enforce").strip().lower()
+    return m if m in ("enforce", "shadow", "off") else "enforce"
+
+
+def uncheckable_gate(ticket_id, ticket, attempt):
+    """wq#5143 (wq#5041 gap 2): (derived_doc, exit_code_or_None) for a fresh attempt.
+
+    Before this gate a ticket that derived zero replayable criteria dispatched UNGATED:
+    pin_acceptance() returned None, verify_done() passed vacuously, and the ticket
+    closed on the worker's own `wq done` prose (2026-10-27..11-26: 89 of 273 run
+    tickets, all research-synthesis / rca-investigation / verify-pass). Now such a
+    ticket goes to Frank's queue as UNCHECKABLE before a worktree or a token exists —
+    unless its archetype is checked by another route (acceptance.
+    CHECKED_ELSEWHERE_ARCHETYPES) or it carries acceptance.UNCHECKABLE_ACK.
+
+    The derived doc is handed back so pin_acceptance() pins exactly what was judged
+    (and a FOREMAN_ACCEPTANCE_MODEL derivation is paid for once). Off with the
+    evidence gate (FOREMAN_EVIDENCE_GATE=0) or FOREMAN_UNCHECKABLE_GATE=off; shadow
+    logs the verdict and dispatches ungated as before."""
+    mode = uncheckable_mode()
+    if not evidence_gate_on() or mode == "off":
+        return None, None
+    rd = run_dir(ticket_id)
+    pinned = acceptance_mod.pinned_doc(rd)
+    if pinned and pinned.get("criteria"):
+        return None, None
+    try:
+        doc = acceptance_mod.derive(dict(ticket, id=ticket_id),
+                                    model_call=_acceptance_model_call())
+    except Exception as e:
+        log(f"WARN: acceptance derivation failed ({e})")
+        doc = None
+    reason = acceptance_mod.uncheckable(doc, ticket)
+    if reason is None:
+        return doc, None
+    if mode == "shadow":
+        log(f"wq#{ticket_id}: UNCHECKABLE [shadow, wq#5143] {reason} — dispatching "
+            f"ungated (recorded only)")
+        return doc, None
+    rec = failure_record.build_uncheckable_record(ticket_id, attempt, reason,
+                                                  archetype=ticket.get("archetype"))
+    try:
+        fpath = failure_record.write_failure_record(rd, rec)
+    except OSError as e:
+        fpath = os.path.join(rd, failure_record.FAILURE_FILENAME)
+        log(f"WARN wq#{ticket_id}: failure.json write failed ({e})")
+    line = failure_record.block_reason_line(rec, fpath)
+    prompt = (f"wq#{ticket_id} has no machine-checkable definition of done: {reason}. "
+              f"Dispatched as-is, a worker would close it on its own prose. Options: "
+              f"(1) add a runnable check to the ticket detail (a `pytest ...` / `make ...` "
+              f"/ `npm test`-style command in backticks) and reopen; (2) if the "
+              f"deliverable is really a code change, set a diff archetype (e.g. "
+              f"standard-engineering, which gets a cited-diff criterion) and reopen; "
+              f"(3) accept an ungated run: wq note {ticket_id} "
+              f"\"{acceptance_mod.UNCHECKABLE_ACK} <why>\" and reopen; (4) retire it. "
+              f"Record: {fpath}")
+    gated = frank_gate(ticket_id, prompt,
+                       "Prefer (1): a check the harness re-runs is what makes done mean "
+                       "done. (3) only where a human reads the output anyway.",
+                       "acceptance decision for Frank (wq#5143)")
+    if not gated:
+        # enforce means never ungated: if the decision queue refused, block instead
+        log(f"BLOCKED [UNCHECKABLE]: frank-gate did not take — {line}")
+        wq_block(ticket_id, line)
+        ntfy("foreman BLOCKED", f"wq#{ticket_id} [UNCHECKABLE]: {line}", priority="high")
+        return doc, EXIT_BLOCKED
+    wq("note", str(ticket_id), f"[uncheckable wq#5143] {line}")
+    log(f"FRANK_GATED [UNCHECKABLE]: {line}")
+    ntfy("foreman UNCHECKABLE", f"wq#{ticket_id}: {reason} — in Frank's queue, nothing ran")
+    print("FRANK_GATED")
+    return doc, EXIT_FRANK_GATED
+
+
+def frank_gate_stop_needs_answer(ticket_id, state):
+    """wq#5144: STOP: 4 with no usable decision card after one request. A retry cannot
+    produce Frank's answer, so the worker's own summary goes to his queue as the
+    question. Returns EXIT_FRANK_GATED, or None (gate refused -> ordinary path)."""
+    if not frank_gate(ticket_id, stop_code.frank_prompt(ticket_id, state.result_text),
+                      "Answer in the notes and reopen; the next attempt starts fresh "
+                      "with the ticket text, so record the decision there.",
+                      "worker needs an answer (wq#5144)"):
+        return None
+    wq("note", str(ticket_id),
+       f"[stop-4 wq#5144] worker needs an answer, no card: "
+       f"{stop_code.summary_line(state.result_text)}")
+    log(f"FRANK_GATED [STOP 4]: wq#{ticket_id} worker needs an answer and sent no card")
+    ntfy("foreman STOP 4", f"wq#{ticket_id}: worker needs an answer — in Frank's queue")
+    print("FRANK_GATED")
+    return EXIT_FRANK_GATED
 
 
 def frank_gate_classifier_denial(ticket_id, rec, fpath):
@@ -6420,11 +6601,14 @@ def main():
     # just be governor-denied), so neither kicks. Fail-open, after the exit code is
     # fixed so it can't perturb the outcome.
     # wq#5009: a parked round freed its slot too — that is the point of parking.
+    # wq#5143/wq#5144: so did a ticket moved to Frank's decision queue.
     if getattr(args, "func", None) is cmd_run and rc in (EXIT_OK, EXIT_BLOCKED,
-                                                       EXIT_LOCAL_ESCALATED, EXIT_PARKED):
+                                                       EXIT_LOCAL_ESCALATED, EXIT_PARKED,
+                                                       EXIT_FRANK_GATED):
         trigger_refill(getattr(args, "ticket", "?"),
                        {EXIT_OK: "done", EXIT_BLOCKED: "blocked",
-                        EXIT_LOCAL_ESCALATED: "escalated", EXIT_PARKED: "parked"}[rc])
+                        EXIT_LOCAL_ESCALATED: "escalated", EXIT_PARKED: "parked",
+                        EXIT_FRANK_GATED: "frank_gated"}[rc])
     sys.exit(rc if isinstance(rc, int) else 0)
 
 

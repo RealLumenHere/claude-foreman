@@ -192,6 +192,18 @@ NON_DIFF_ARCHETYPES = {"verify-pass", "rca-investigation", "fire-response",
 # They get NO pinned criteria: the harness itself validates the deliverable
 # (review_sarif.emit parses the findings block and writes the SARIF) before closing.
 NO_EVIDENCE_ARCHETYPES = {"review-readonly"}
+# wq#5143 (wq#5041 gap 2 — CodeAF: "work that cannot be checked waits for the human"): a
+# ticket for which derive() yields no replayable criterion used to dispatch UNGATED and
+# close on the worker's own `wq done` prose — verify() is vacuous on an empty doc and
+# exit_gate only needs ticket_done + a clean result. These archetypes are exempt because
+# the harness checks their deliverable by another route: review-readonly's findings are
+# parsed into SARIF by the harness (wq#5145), and a verify-pass IS the check (its verdict
+# feeds orchestrator/judgment.py). Any other archetype with zero criteria is UNCHECKABLE
+# and goes to Frank's queue before a worktree or a token is spent.
+CHECKED_ELSEWHERE_ARCHETYPES = NO_EVIDENCE_ARCHETYPES | {"verify-pass"}
+# Frank's "run it ungated anyway" answer: this marker in the ticket's notes or detail
+# lifts the gate for that ticket alone.
+UNCHECKABLE_ACK = "[uncheckable-ok]"
 
 VALID_PROOF_TYPES = ("test", "citation")
 REPLAY_TIMEOUT_S = int(os.environ.get("FOREMAN_REPLAY_TIMEOUT_S", "900") or 900)
@@ -485,6 +497,25 @@ def derive(ticket, model_call=None):
         derived_by = "deterministic"
     return {"ticket": f"wq#{ticket.get('id', '?')}", "derived_by": derived_by,
             "criteria": criteria, "notes": notes}
+
+
+def uncheckable(doc, ticket):
+    """wq#5143: why `ticket` has no machine-checkable done, or None when it has one.
+    `doc` is derive()'s output, or None when derivation itself raised."""
+    archetype = (ticket.get("archetype") or "").strip()
+    if archetype in CHECKED_ELSEWHERE_ARCHETYPES:
+        return None
+    if doc is not None and doc.get("criteria"):
+        return None
+    if UNCHECKABLE_ACK in f"{ticket.get('notes') or ''}\n{ticket.get('detail') or ''}":
+        return None
+    if doc is None:
+        return "acceptance derivation raised, so nothing machine-checkable was built"
+    arch = archetype or "standard-engineering"
+    tail = (", and its deliverable is not a diff to cite"
+            if arch in NON_DIFF_ARCHETYPES else "")
+    return (f"no replayable acceptance criterion derived (archetype {arch}: the ticket "
+            f"names no runnable test command{tail})")
 
 
 def _json_span(raw):

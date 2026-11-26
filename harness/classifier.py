@@ -34,6 +34,11 @@ HANG = "HANG"
 AUTH = "AUTH"
 DEGRADED_SUCCESS = "DEGRADED_SUCCESS"
 FALSE_COMPLETE = "FALSE_COMPLETE"
+# wq#5144 stop-code contract: a clean exit the worker itself labelled. UNFINISHED (STOP: 2)
+# takes the resume path FALSE_COMPLETE takes, without the "false claim" label;
+# WORKER_LIMIT (STOP: 3) takes the TURNS/BUDGET limit path. Never produced by classify().
+UNFINISHED = "UNFINISHED"
+WORKER_LIMIT = "WORKER_LIMIT"
 # wq#1107: the loop breaker stopped the session, but the repeated failure was this
 # harness's own permission configuration refusing a tool call — the run says nothing
 # about the model or the ticket. Never produced by classify() (which only sees the

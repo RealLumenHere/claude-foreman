@@ -532,9 +532,14 @@ def test_worker_prompt_carries_the_contract_and_keeps_the_sentinel_last():
     p = os.path.join(os.path.dirname(__file__), "..", "prompts", "worker.md")
     text = open(p).read()
     assert exit_gate.PROTOCOL_MARKER in text
-    assert text.index("EXIT_SIGNAL: true|false") < text.index("TICKET_CLOSED | BLOCKED | CLAIM_ERROR")
+    # wq#5144: the stop code leads the closing lines; the sentinel stays last
+    assert (text.index("STOP: <code>") < text.index("EXIT_SIGNAL: true|false")
+            < text.index("<sentinel, for the codes that have one>"))
     import classifier
     assert classifier.parse_worker_sentinel("ok\nEXIT_SIGNAL: true\nTICKET_CLOSED") == "TICKET_CLOSED"
+    assert classifier.parse_worker_sentinel(
+        "ok\nSTOP: 0\nEXIT_SIGNAL: true\nTICKET_CLOSED") == "TICKET_CLOSED"
+    assert exit_gate.parse_exit_signal("ok\nSTOP: 0\nEXIT_SIGNAL: true\nTICKET_CLOSED") is True
 
 
 def test_mode_parsing(monkeypatch):

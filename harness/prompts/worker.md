@@ -124,8 +124,8 @@ RULES:
 - Do the work to completion, obeying the ticket's acceptance criteria and any repo
   standards it references.
 - `/home/lumen/bin/wq done <id> --notes "<PR url + one-line summary>"` when the gate is
-  satisfied (id below); if you can't finish honestly, say so and
-  `/home/lumen/bin/wq release <id>` instead of closing a half-done ticket.
+  satisfied (id below); if you can't finish honestly, say so and stop with `STOP: 2`
+  (keep the claim — the harness resumes or retries) instead of closing a half-done ticket.
 
 {{ACCEPTANCE_CONTRACT}}
 
@@ -133,8 +133,8 @@ RULES:
 
 Decision only Frank can make (wq#5009 park-and-resume): when finishing needs a choice,
 an approval or a physical act that is Frank's alone, do not `wq block` and do not wait.
-Commit what you have, then end your final message with a decision card and the two
-closing lines `EXIT_SIGNAL: false` and `PARKED`:
+Commit what you have, then end your final message with a decision card and the three
+closing lines `STOP: 4`, `EXIT_SIGNAL: false` and `PARKED`:
 ```foreman-park
 {"ask": {"title": "<the decision, one line>", "text": "<what you found and what each option costs>", "options": ["<A>", "<B>"], "recommend": "<one of options>"}}
 ```
@@ -142,15 +142,21 @@ The harness parks THIS session (no process, no tokens while it waits), sends Fra
 card, and resumes you with his answer as your next turn. Only for a decision that is
 really his: anything you can settle from evidence, settle yourself and record why.
 
-Exit contract (wq#5007 — the harness accepts an exit as a completion only on BOTH an
-explicit signal from you AND its own verification). End your final message with
-exactly these two lines, nothing after them:
+Exit contract (wq#5007 + wq#5144 stop-code contract — the harness routes your exit on
+the stop code you give, and accepts a completion only on BOTH your explicit signal AND
+its own verification). End your final message with these lines, nothing after them:
+STOP: <code>
 EXIT_SIGNAL: true|false
-TICKET_CLOSED | BLOCKED | CLAIM_ERROR
-`EXIT_SIGNAL: true` goes only with TICKET_CLOSED, and only after the work has landed
-and `wq done` has run; anything unfinished, blocked or released is
-`EXIT_SIGNAL: false`. A missing EXIT_SIGNAL line reads as false: the harness will
-block your stop or resume you once to ask for it. The sentinel stays the last line.
+<sentinel, for the codes that have one>
+  STOP: 0  done          landed, `wq done` ran           EXIT_SIGNAL: true   TICKET_CLOSED
+  STOP: 1  cannot run    you ran `wq block <id> "<why>"`  EXIT_SIGNAL: false  BLOCKED
+  STOP: 2  unfinished    ran, more remains, claim kept   EXIT_SIGNAL: false  (none)
+  STOP: 3  limit         a ceiling of yours stopped you  EXIT_SIGNAL: false  (none)
+  STOP: 4  needs answer  the foreman-park card above     EXIT_SIGNAL: false  PARKED
+A lost claim race is `STOP: 2`, `EXIT_SIGNAL: false`, `CLAIM_ERROR`. Codes 1-4 are taken
+at their word (blocked / resumed / limit path / Frank's card); code 0 is still re-checked.
+A missing EXIT_SIGNAL line reads as false: the harness will block your stop or resume
+you once to ask for it. The sentinel, where there is one, stays the last line.
 
 ---
 
