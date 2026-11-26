@@ -65,16 +65,36 @@ audit_disable_rule() {
 # the 2026-08-08 Thor failure of this same unit (agents/work-queue/reports/
 # fleet_update_20260808.md:55-58; fixed by backup + `grub-editenv create`).
 
-# grubenv_state FILE — ok | absent | bad-header | bad-size:<n>
+# grubenv_state FILE — ok | absent | unreadable | bad-header | bad-size:<n>
 # bad-header is the corruption grub-editenv rejects; bad-size alone is reported but
 # not treated as corruption (grub only checks the signature).
+# wq#5337: every read goes through ${SUDO:-} (the caller's escalation, e.g. `sudo -n`;
+# empty = read as this user). A file that exists but cannot be read is `unreadable`,
+# never `bad-header`: the first bundle read as the unescalated bes ssh user, so a
+# permission failure looked like a bad signature and the healthy env would have been
+# backed up and recreated (verify wq#5334 probe P1).
 grubenv_state() {
-  local f="$1" n
-  [ -e "$f" ] || { echo absent; return; }
-  if [ "$(head -c 24 "$f")" != "# GRUB Environment Block" ]; then echo bad-header; return; fi
-  n="$(stat -c %s "$f")"
+  local f="$1" h n
+  [ -e "$f" ] || ${SUDO:-} test -e "$f" 2>/dev/null || { echo absent; return; }
+  h="$(${SUDO:-} head -c 24 -- "$f" 2>/dev/null)" || { echo unreadable; return; }
+  [ "$h" = "# GRUB Environment Block" ] || { echo bad-header; return; }
+  n="$(${SUDO:-} stat -c %s -- "$f" 2>/dev/null)" || { echo unreadable; return; }
   [ "$n" = 1024 ] || { echo "bad-size:$n"; return; }
   echo ok
+}
+
+# initrd_fallback_order — stdin: `systemctl cat grub-initrd-fallback.service`.
+# Prints fixed | stale | none. Ubuntu LP#2156423: the packaged unit ordered
+# After=grub-common.service, a unit since renamed grub2-common.service, so the two run
+# in parallel at boot and both rewrite grubenv; the loser logs "invalid environment
+# block" while the file on disk ends up valid. stale = names the old unit, not the new.
+# Diagnostic only: the fix is the grub2-common package upgrade, done by hand.
+initrd_fallback_order() {
+  local a
+  a="$(grep -v '^[[:space:]]*#' | grep -E '^[[:space:]]*After=' | tr ' =' '\n\n')"
+  if grep -qx 'grub2-common.service' <<<"$a"; then echo fixed
+  elif grep -qx 'grub-common.service' <<<"$a"; then echo stale
+  else echo none; fi
 }
 
 # --- maksoor max-brightness.service -------------------------------------------

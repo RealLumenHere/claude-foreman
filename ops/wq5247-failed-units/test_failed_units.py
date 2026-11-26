@@ -45,7 +45,8 @@ def stubs(tmp_path):
         case "$1" in
           is-failed) cat "{state}" ;;
           restart) echo inactive > "{state}" ;;
-          cat) cat "{tmp_path}/unit_text" 2>/dev/null ;;
+          cat) if [ "$2" = grub2-common.service ]; then cat "{tmp_path}/g2c_text" 2>/dev/null
+               else cat "{tmp_path}/unit_text" 2>/dev/null; fi ;;
           *) : ;;
         esac
     """)
@@ -117,6 +118,40 @@ def test_grubenv_state(tmp_path):
     assert lib('grubenv_state "$1"', str(g))[1].strip() == "bad-header"
     g.write_bytes(GOOD_ENV[:600])
     assert lib('grubenv_state "$1"', str(g))[1].strip() == "bad-size:600"
+
+
+def test_grubenv_state_unreadable_is_not_bad_header(tmp_path):
+    # wq#5337 (verify 5334 probe P1): a read failure must not read as a bad signature.
+    g = tmp_path / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    deny = tmp_path / "deny"  # stands in for a refused `sudo -n`; holds even as root
+    write_exe(deny, 'echo "sudo: a password is required" >&2; exit 1\n')
+    allow = tmp_path / "allow"
+    write_exe(allow, 'exec "$@"\n')
+    env = dict(os.environ)
+    run = lambda sudo: sh(f'. "{LIB}"; SUDO="$2"; grubenv_state "$1"', str(g), sudo,
+                          env=env).stdout.strip()
+    assert run(str(deny)) == "unreadable"
+    assert run(str(allow)) == "ok"
+    assert run("") == "ok"
+    if os.geteuid() != 0:  # real 0000-mode healthy env, no SUDO
+        g.chmod(0)
+        try:
+            assert run("") == "unreadable"
+            assert run(str(allow)) == "unreadable"
+        finally:
+            g.chmod(0o644)
+    assert g.read_bytes() == GOOD_ENV
+
+
+@pytest.mark.parametrize("text,want", [
+    ("[Unit]\nAfter=local-fs.target\nAfter=grub2-common.service\n", "fixed"),
+    ("[Unit]\nAfter=local-fs.target grub-common.service\n", "stale"),
+    ("[Unit]\n# After=grub-common.service\nAfter=local-fs.target\n", "none"),
+    ("[Unit]\nAfter=grub-common.service\n[Unit]\nAfter=grub2-common.service\n", "fixed"),
+])
+def test_initrd_fallback_order(text, want):
+    assert sh(f'. "{LIB}"; initrd_fallback_order', stdin=text).stdout.strip() == want
 
 
 def test_backlight_targets_and_dropin():
@@ -264,6 +299,68 @@ def test_bes_bad_size_grubenv_is_refused(stubs):
     assert p.returncode == 1 and "UNFIXED bes: grubenv is not corrupt" in p.stdout
     assert state.read_text().strip() == "failed"
     assert not (tmp / "grubenv.corrupt.bak.TS4").exists()
+
+
+REFUSE_SUDO = "echo 'sudo: a password is required' >&2; exit 1\n"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads a 0000 file")
+def test_bes_unreadable_grubenv_is_not_recreated(stubs):
+    # wq#5337 / verify 5334 probe P1: healthy env at mode 0000, no working sudo. The
+    # first bundle called it bad-header -> "grubenv corrupt" -> backup + recreate.
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    _grub_stub(b, g)
+    write_exe(b / "sudo", REFUSE_SUDO)
+    g.chmod(0)
+    try:
+        for dry in ("1", "0"):
+            p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), dry, "TS5")
+            assert p.returncode == 1, p.stdout + p.stderr
+            assert "grubenv_state: unreadable" in p.stdout
+            assert "UNFIXED bes: cannot read" in p.stdout
+            assert "grubenv corrupt" not in p.stdout and "would:" not in p.stdout
+    finally:
+        g.chmod(0o644)
+    assert g.read_bytes() == GOOD_ENV
+    assert not list(tmp.glob("grubenv.corrupt.bak*"))
+    assert state.read_text().strip() == "failed"
+
+
+def test_bes_sudo_refused_is_unreadable_not_corrupt(stubs):
+    # Root-safe twin: readable 0644 env but sudo -n refused -> the root read fails ->
+    # unreadable -> UNFIXED, file untouched (a refused sudo could not fix it anyway).
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    _grub_stub(b, g)
+    write_exe(b / "sudo", REFUSE_SUDO)
+    p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), "0", "TS6")
+    assert p.returncode == 1 and "UNFIXED bes: cannot read" in p.stdout, p.stdout + p.stderr
+    assert g.read_bytes() == GOOD_ENV and not list(tmp.glob("grubenv.corrupt.bak*"))
+    assert state.read_text().strip() == "failed"
+
+
+STALE_UNIT = ("# /usr/lib/systemd/system/grub-initrd-fallback.service\n[Unit]\n"
+              "After=local-fs.target\nAfter=grub-common.service\n")
+
+
+@pytest.mark.parametrize("g2c,want", [(True, "LP#2156423"), (False, None)])
+def test_bes_lp2156423_stale_order_is_reported_not_changed(stubs, g2c, want):
+    tmp, b, state, env = stubs
+    g = tmp / "grubenv"
+    g.write_bytes(GOOD_ENV)
+    _grub_stub(b, g)
+    (tmp / "unit_text").write_text(STALE_UNIT)
+    if g2c:
+        (tmp / "g2c_text").write_text("[Unit]\nDescription=Record successful boot for GRUB\n")
+    p = _remote("remote-bes.sh", dict(env, WQ5247_GRUBENV=str(g)), "1", "TS7")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "unit ordering: stale" in p.stdout
+    assert (("upgrade grub2-common" in p.stdout) == bool(want)), p.stdout
+    assert g.read_bytes() == GOOD_ENV and not list(tmp.glob("grubenv.corrupt.bak*"))
+    assert state.read_text().strip() == "failed"
 
 
 def test_maksoor_absent_backlight_gets_dropin(stubs):

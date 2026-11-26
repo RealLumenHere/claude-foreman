@@ -72,10 +72,24 @@ list error) → `UNFIXED`.
 during boot after the unit read it, so the "readable grubenv" branch above was added; the
 first bundle refused that case as `UNFIXED`.
 
+**wq#5337 (from verify wq#5334):**
+- *Unreadable is not corrupt.* `remote-bes.sh` runs as the unescalated `bes` ssh user and
+  `grubenv_state` used to read as that user, so a permission failure came back as
+  `bad-header` and the script would back up and `grub-editenv create` a healthy env.
+  Every read in `grubenv_state` now goes through `${SUDO:-}` (`sudo -n` on bes), as does
+  `grub-editenv list`; a read failure is its own state, `unreadable` → `UNFIXED`, exit 1,
+  file untouched.
+- *bes's failure is Ubuntu LP#2156423, not corruption.* bes (grub2-common
+  2.14-2ubuntu2) ships the unit with `After=grub-common.service`, renamed upstream to
+  `grub2-common.service`, so the two race on grubenv at boot. Fixed in 2.14-2ubuntu2.1
+  (changelog: "grub-initrd-fallback.service: After grub2-common.service (LP: #2156423)").
+  `remote-bes.sh` reports the ordering (`initrd_fallback_order`) and prints the by-hand
+  fix; it changes nothing: `sudo apt-get install --only-upgrade grub2-common`.
+
 ## Files
 - `install.sh` — entry point + `--verify` (ops/_verify.sh contract).
 - `lib.sh` — the decision helpers (pure; `audit_disable_rule` edits only its argument).
 - `lumen-audit.sh`, `remote-maksoor.sh`, `remote-bes.sh` — one per unit; the remote ones
   are piped with `lib.sh` over `ssh … bash -s`.
-- `test_failed_units.py` — 22 tests, stubs on PATH, fixtures only; each branch above
+- `test_failed_units.py` — 33 tests, stubs on PATH, fixtures only; each branch above
   (fix and refuse) is covered.

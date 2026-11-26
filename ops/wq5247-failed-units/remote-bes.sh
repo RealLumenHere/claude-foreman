@@ -12,15 +12,26 @@ systemctl status "$U" --no-pager 2>&1 | sed -n '1,8p'
 echo '-- journal (this boot)'
 { $SUDO journalctl -b -u "$U" --no-pager 2>/dev/null || journalctl -b -u "$U" --no-pager 2>&1; } | tail -n 15
 echo '-- grubenv'; ls -l "$G" 2>&1; grep -E ' /boot(/efi)? ' /proc/mounts
+# wq#5337: read as root through $SUDO (grubenv_state uses ${SUDO:-}); if sudo -n is
+# refused the state is `unreadable` and the file is left alone, never "corrupt".
 s="$(grubenv_state "$G")"
 echo "  grubenv_state: $s"
-list="$(grub-editenv "$G" list 2>&1)"; lrc=$?
+list="$($SUDO grub-editenv "$G" list 2>&1)"; lrc=$?
 echo "  grub-editenv list rc=$lrc: $list"
+order="$(systemctl cat "$U" --no-pager 2>/dev/null | initrd_fallback_order)"
+lp=""
+if [ "$order" = stale ] && systemctl cat grub2-common.service --no-pager >/dev/null 2>&1; then
+  lp="LP#2156423: $U orders After=grub-common.service but that unit is now grub2-common.service (boot race on grubenv); fix by hand: sudo apt-get install --only-upgrade grub2-common && sudo systemctl reset-failed $U"
+fi
+echo "  unit ordering: $order${lp:+ — $lp}"
 
 if [ "$(systemctl is-failed "$U" 2>/dev/null)" != failed ]; then
   echo "VERDICT bes: $U not failed now — nothing to do"; exit 0
 fi
 case "$s|$list" in
+  'unreadable|'*)
+    echo "UNFIXED bes: cannot read $G as root (sudo -n refused?) — an unreadable file is not treated as corrupt; nothing touched"
+    exit 1 ;;
   'bad-header|'*|*'invalid environment block'*) ;;
   ok\|*)
     # wq#5332: the live run found exactly this. Journal: "invalid environment block" at
@@ -40,7 +51,9 @@ case "$s|$list" in
     echo "  $U: $st"
     if [ "$st" = failed ]; then
       $SUDO journalctl -b -u "$U" --no-pager 2>/dev/null | tail -n 6
-      echo "UNFIXED bes: $U still fails on a valid grubenv (journal above)"; exit 1
+      echo "UNFIXED bes: $U still fails on a valid grubenv (journal above)"
+      [ -n "$lp" ] && echo "  $lp"
+      exit 1
     fi
     exit 0 ;;
   *) echo 'UNFIXED bes: grubenv is not corrupt, so the failure has another cause (journal above: /boot read-only? full?)'
