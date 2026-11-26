@@ -3706,7 +3706,8 @@ def run_child(cmd, cwd, env, max_turns, wall_clock_s, ticket_id, attempt,
     # are unchanged. A sandbox that cannot be built is a failed spawn, never a spawn
     # without the sandbox.
     try:
-        cmd = hermetic.wrap(cmd, cwd, env, run_dir=run_dir(ticket_id))
+        if hermetic.mode("FOREMAN_HERMETIC_MOUNT", env) == "enforce":
+            cmd = hermetic.wrap(cmd, cwd, env, run_dir=run_dir(ticket_id))
     except hermetic.HermeticError as e:
         log(f"wq#{ticket_id} attempt {attempt}: hermetic mount refused the spawn: {e}")
         return RunState(), 1, [{"type": "hermetic_error", "error": str(e)}], None, 0.0, None

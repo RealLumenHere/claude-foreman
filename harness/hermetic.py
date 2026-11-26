@@ -3,8 +3,9 @@
 
 One rule: a worker's file output goes to its own lumen-pr worktree (the PR path) or
 to its per-ticket output dir /scratch/agent-work/<ticket-id>/. Nothing else is
-writable. The wq scratch dir (/tmp/<agent>/, wq#1697) and a Frank-approved H1 grant
-target stay writable because the harness itself hands them out.
+writable. Two more paths stay writable because the harness or lumen-pr hands them
+out: the wq scratch dir (/tmp/<agent>/, wq#1697), and a second-repo lumen-pr worktree
+whose name carries the ticket's wq<id>.
 
 Three layers, each with its own switch (fworker.build_env exports them to the child;
 values come from defaults < FOREMAN_ROOT/hermetic.json < fworker's own environment):

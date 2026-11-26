@@ -36,7 +36,7 @@ Each row is a PreToolUse envelope fed to the live `guard.sh`, then to
 | 5 | `Write <worktree>/../../../home/lumen/foreman/harness/zz.py` | allowed: the wq#1719 wall matched the raw string | refused, on the resolved path |
 | 6 | `Write` through a symlink in the worktree that points outside | allowed | refused |
 | 7 | `NotebookEdit` anywhere | not hooked at all (matcher was `Bash\|Read\|Edit\|Write`) | hooked, same allowlist |
-| 8 | `Grep` / `Glob` with `path=/home/lumen/.secrets` | not hooked by guard.sh (same matcher gap; only the CLI's own `Read(...)` deny stood) | hooked: the existing credential deny now runs |
+| 8 | `Grep` / `Glob` with `path=/home/lumen/.secrets` | not hooked by guard.sh (same matcher gap). CLI 2.1.329 does not offer these two tools to a session, so this was reachable only in the `sdk` runtime, whose tool list has both | hooked: the existing credential deny now runs |
 | 9 | `Bash: echo x >> /home/lumen/foreman/harness/zz` | allowed (GREEN) | refused |
 | 10 | `Bash: cp a.txt /home/lumen/foreman/harness/zz` | allowed (AMBER) | refused |
 | 11 | `Bash: sed -i ... /home/lumen/foreman/harness/guard.sh` (the live guard) | allowed (AMBER) | refused |
@@ -51,6 +51,15 @@ Row 17 is the limit of any hook. Workers hold `Bash(python3 *)`, `Bash(node *)`,
 `Bash(sed *)` and `Bash(cp *)`, so a hook that reads the command string can catch an
 honest mistake but not a write made inside an interpreter. Only the mount layer
 closes that.
+
+## Checked with a real session
+
+One `claude -p` run (CLI 2.1.329, haiku, 4 turns) against a copy of
+`worker-settings.json` pointed at this branch's `guard.sh`: Write into the working
+dir was allowed; Write to `/home/lumen/wq4830_smoke_probe.txt` came back as
+"guard.sh: BLOCKED — hermetic output contract (wq#4830) ..." and no file was made.
+The CLI accepted the widened matcher. Grep and Glob calls returned "No such tool
+available", which is where the note on row 8 comes from.
 
 ## What enforcing costs: 30 days of real sessions replayed
 
@@ -199,7 +208,7 @@ Turning the mount layer on means choosing what a hermetic worker does about
 `lumen-run`: lose it, or get it back through a broker that starts the unit with the
 same read-only view (`lumen-run` already has `--bind-ro`, wq#4765, so the mechanism
 exists on that side). Until that is chosen the kernel-level half of this ticket is
-built but not on, and rows 16 and 17 above stay open. Follow-up ticket filed for it.
+built but not on, and rows 16 and 17 above stay open. Follow-up: wq#5351 (frank_gated).
 
 ## Not changed, on purpose
 
