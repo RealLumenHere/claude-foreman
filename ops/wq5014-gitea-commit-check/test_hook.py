@@ -20,7 +20,9 @@ WHEEL = os.environ.get("CCHK_WHEEL") or os.path.join(HERE, WHEEL_NAME)
 
 pytestmark = pytest.mark.skipif(not os.path.isfile(WHEEL), reason="commit-check wheel not present")
 
-ASSIST = "Assisted-by: Claude (Anthropic) via Lumen Industries automation"
+SIGNOFF = "Signed-off-by: Lumen Industries <lumen@lumennode.uk>"
+# What lumen-pr appends to every commit: disclosure, then the wq#5138 sign-off.
+ASSIST = "Assisted-by: Claude (Anthropic) via Lumen Industries automation\n" + SIGNOFF
 
 
 def run(cwd, *args, env=None, check=True):
@@ -82,13 +84,14 @@ def test_lumen_pr_house_format_is_accepted(forge):
 
 
 def test_ai_tool_as_co_author_is_refused(forge):
-    commit(forge["wc"], "fix(x): thing\n\nCo-authored-by: Claude <noreply@anthropic.com>")
+    commit(forge["wc"], "fix(x): thing\n\nCo-authored-by: Claude <noreply@anthropic.com>\n" + SIGNOFF)
     p = push(forge["wc"])
     assert refused(p), p.stderr
 
 
 def test_undisclosed_ai_stamp_is_refused(forge):
-    commit(forge["wc"], "fix(x): thing\n\nGenerated with [Claude Code](https://claude.com/claude-code)")
+    commit(forge["wc"], "fix(x): thing\n\nGenerated with [Claude Code](https://claude.com/claude-code)\n\n"
+           + SIGNOFF)
     assert refused(push(forge["wc"]))
 
 
@@ -103,13 +106,13 @@ def test_subject_over_80_is_refused(forge):
 
 
 def test_wip_is_refused(forge):
-    commit(forge["wc"], "WIP: half done")
+    commit(forge["wc"], "WIP: half done\n\n" + SIGNOFF)
     assert refused(push(forge["wc"]))
 
 
 def test_one_bad_commit_in_a_series_refuses_the_whole_push(forge):
     commit(forge["wc"], "fix(x): good one\n\n" + ASSIST)
-    commit(forge["wc"], "oops")
+    commit(forge["wc"], "oops\n\n" + SIGNOFF)
     commit(forge["wc"], "fix(x): good two\n\n" + ASSIST)
     p = push(forge["wc"])
     assert refused(p), p.stderr
@@ -118,7 +121,7 @@ def test_one_bad_commit_in_a_series_refuses_the_whole_push(forge):
 
 def test_feature_branch_push_is_checked_too(forge):
     run(forge["wc"], "git", "checkout", "-q", "-b", "fix/thing")
-    commit(forge["wc"], "nope not conventional")
+    commit(forge["wc"], "nope not conventional\n\n" + SIGNOFF)
     assert refused(push(forge["wc"], "HEAD:refs/heads/fix/thing"))
 
 
@@ -170,5 +173,76 @@ def test_exempt_repo_accepts_anything(forge):
 
 def test_exempt_list_naming_another_repo_does_not_exempt_this_one(forge):
     (forge["etc"] / "exempt-repos").write_text("lumen/obsidian-vault\n")
-    commit(forge["wc"], "auto: fleet memory sync 2026-10-08T07:08:14Z")
+    commit(forge["wc"], "auto: fleet memory sync 2026-10-08T07:08:14Z\n\n" + SIGNOFF)
     assert refused(push(forge["wc"]))
+
+
+# --- wq#5138: Signed-off-by is required ------------------------------------------------
+
+def test_missing_signoff_is_refused_and_the_message_says_how_to_fix_it(forge):
+    commit(forge["wc"], "fix(x): compliant except for the sign-off\n\n"
+           "Assisted-by: Claude (Anthropic) via Lumen Industries automation")
+    p = push(forge["wc"])
+    assert refused(p), p.stderr
+    assert "require-signed-off-by" in p.stderr, p.stderr
+    assert "wq#5138" in p.stderr and "git commit -s" in p.stderr, p.stderr
+
+
+def test_signoff_alone_is_enough_for_a_human_commit(forge):
+    commit(forge["wc"], "docs(readme): fix a typo\n\nSigned-off-by: A Human <human@example.org>")
+    assert push(forge["wc"]).returncode == 0
+
+
+def test_git_commit_dash_s_is_accepted(forge):
+    (forge["wc"] / "s.txt").write_text("s")
+    run(forge["wc"], "git", "add", "-A")
+    run(forge["wc"], "git", "commit", "-q", "-s", "-m", "fix(x): signed with -s")
+    assert push(forge["wc"]).returncode == 0
+
+
+def test_merge_commit_needs_the_signoff_too(forge):
+    wc = forge["wc"]
+    run(wc, "git", "checkout", "-q", "-b", "fix/side")
+    commit(wc, "fix(x): side work\n\n" + ASSIST)
+    run(wc, "git", "checkout", "-q", "main")
+    commit(wc, "fix(x): main moved\n\n" + ASSIST)
+    run(wc, "git", "merge", "-q", "--no-ff", "-m", "Merge branch 'fix/side' into main", "fix/side")
+    p = push(wc)
+    assert refused(p), p.stderr
+    assert p.stderr.count("(policy):") == 1, p.stderr  # the merge commit, not the two it joins
+    run(wc, "git", "commit", "-q", "--amend", "-m", "Merge branch 'fix/side' into main\n\n" + SIGNOFF)
+    assert push(wc).returncode == 0
+
+
+def test_squash_body_as_token_engine_writes_it_is_accepted(forge):
+    # verb_pr_merge: the PR title as the subject, the deduped footers as the body.
+    commit(forge["wc"], "feat(v2): retro-mask stored vault content\n\n"
+           "Refs: wq#5128\nAssisted-by: Claude (Anthropic) via Lumen Industries automation\n" + SIGNOFF)
+    assert push(forge["wc"]).returncode == 0
+
+
+def test_shipped_policy_requires_the_signoff():
+    import tomllib
+    with open(os.path.join(HERE, "cchk.toml"), "rb") as f:
+        assert tomllib.load(f)["commit"]["require_signed_off_by"] is True
+
+
+def test_installer_smoke_message_passes_the_policy_it_installs(tmp_path):
+    # install.sh runs commit-check on this message right after writing cchk.toml and stops on
+    # a failure. With the sign-off required, a bare 'fix(x): smoke' would abort every install
+    # after the policy file was already replaced.
+    import re
+    text = open(os.path.join(HERE, "install.sh")).read()
+    m = re.search(r"^printf '(.*)' > \"\$LIB/\.smoke\"$", text, re.M)
+    assert m, "smoke line not found in install.sh"
+    msg = m.group(1).encode().decode("unicode_escape")
+    site = tmp_path / "site"
+    zipfile.ZipFile(WHEEL).extractall(site)
+    smoke = tmp_path / "smoke"
+    smoke.write_text(msg)
+    boot = ("import sys; sys.path.insert(0, sys.argv.pop(1)); "
+            "from commit_check.main import main; sys.exit(main())")
+    p = run(tmp_path, "/usr/bin/python3", "-I", "-c", boot, str(site), "-c",
+            os.path.join(HERE, "cchk.toml"), "--message", "--no-banner", "--compact", str(smoke),
+            check=False)
+    assert p.returncode == 0, p.stdout + p.stderr

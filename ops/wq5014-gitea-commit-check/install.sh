@@ -69,7 +69,7 @@ install -m 755 -o root -g root "$SRC/hook.py" "$LIB/hook.py"
 install -m 644 -o root -g root "$SRC/cchk.toml" "$ETC/cchk.toml"
 install -m 644 -o root -g root "$SRC/exempt-repos" "$ETC/exempt-repos"
 # smoke: the checker runs and loads the policy (rc 0 = message passes)
-printf 'fix(x): smoke\n' > "$LIB/.smoke"
+printf 'fix(x): smoke\n\nSigned-off-by: Lumen Industries <lumen@lumennode.uk>\n' > "$LIB/.smoke"
 python3 -I -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from commit_check.main import main; sys.exit(main())' \
   "$LIB/site" -c "$ETC/cchk.toml" --message --no-banner --compact "$LIB/.smoke"
 rm -f "$LIB/.smoke"

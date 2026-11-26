@@ -53,7 +53,10 @@ def refuse(lines):
     print("lumen-commit-check: push REFUSED (wq#5014 commit policy). Fix the message with "
           "`git commit --amend` / `git rebase -i`, or land through `lumen-pr`, which writes "
           "compliant messages. Policy: house Conventional Commits, subject <= 80 chars, AI "
-          "help disclosed as `Assisted-by:`, never an AI `Co-authored-by:`.", file=sys.stderr)
+          "help disclosed as `Assisted-by:`, never an AI `Co-authored-by:`, and a "
+          "`Signed-off-by:` trailer on every commit (wq#5138; `git commit -s`, or for a merge "
+          "in the web UI add the line `Signed-off-by: Name <email>` to the message box).",
+          file=sys.stderr)
     sys.exit(1)
 
 

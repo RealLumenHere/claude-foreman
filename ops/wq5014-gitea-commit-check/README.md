@@ -11,7 +11,7 @@ no network calls with this config) on each commit the push introduces, against `
 | subject capitalised / imperative | off | house style is lowercase; imperative check is a heuristic with false positives |
 | WIP / fixup commits | refused | |
 | AI attribution | `disclose` | `Assisted-by:`/`Generated-by:` accepted; an AI tool as `Co-authored-by:` or author refused (lumen-pr wq#4798 rule) |
-| Signed-off-by | **off for now** | see "Sign-off" below |
+| Signed-off-by | **required** (wq#5138, 2026-11-26) | every commit, merge commits included; see "Sign-off" below |
 
 ## Fail-closed
 commit-check rc 1 (policy) and rc 2 (cannot run: bad config, git unreadable) both refuse. So does
@@ -53,14 +53,41 @@ tar c . -C .. _verify.sh | ssh anubis@100.121.17.5 \
 `sudo bash install.sh --remove` on Anubis (or delete one repo's `60-commit-check`).
 
 ## Sign-off
-The ticket asks for `require_signed_off_by = true`. It stays off until both:
-1. `lumen-pr commit` appends `Signed-off-by:`, and
-2. the token-engine broker carries it into the squash body (`FOOTER_RE` in
-   `/usr/local/lib/token-engine/token_engine_daemon.py` forwards only
-   Refs/Assisted-by/Generated-by/BREAKING CHANGE/Co-authored-by; root-owned, needs a privileged
-   redeploy).
-Enabling it before then refuses every `lumen-pr land`. Tracked as a follow-up ticket.
+`require_signed_off_by = true` since 2026-11-26 (wq#5138). Every commit pushed to a branch needs
+a `Signed-off-by:` trailer. commit-check does not exempt merge commits from it.
+
+Who writes it:
+- `lumen-pr commit` appends `Signed-off-by: Lumen Industries <lumen@lumennode.uk>` after the
+  `Assisted-by:` footer (lumen-bin 3ce4ff4b).
+- The token-engine broker forwards `Signed-off-by:` from the branch commits into the squash or
+  merge body it sends to Gitea, and adds the house sign-off when none is there
+  (`FOOTER_RE` / `FOOTER_SIGNOFF`, deployed 2026-11-20 01:11Z). Both `lumen-pr land` and
+  `lumen-pr land --merge` therefore land a signed-off commit.
+- By hand: `git commit -s`.
+
+Replay before the flip (2026-11-26, Anubis, all 13 repos, all branches, 7 days by committer
+date, the installed policy plus the flag): 175 commits, 0 refused by the installed policy, 20
+refused for the missing sign-off. All 20 are squash commits on main dated 2026-11-19 13:07Z to
+2026-11-20 01:07Z, before the broker redeploy. Since the redeploy: 155 of 155 pass. They are
+already on the server, and the hook only checks commits that are new to it.
+
+Not covered, by decision (ticket item 3, "or accept they are refused"):
+- A merge made with the Gitea web UI button. Its default message has no sign-off, so the push is
+  refused with the wq#5138 text unless the line `Signed-off-by: Name <email>` is typed into the
+  merge message box. No commit in the replay window came from the web UI, and a web-UI
+  merge-commit was already refused for its non-Conventional subject. To keep the button working
+  without typing, add `.gitea/default_merge_message/SQUASH_TEMPLATE.md` (and `MERGE_TEMPLATE.md`)
+  carrying the trailer to a repo's default branch.
+- The "Update branch" button and a local `git merge main` pushed to a branch: the merge commit
+  needs the trailer too (`git merge --signoff`, or rebase). No merge commit was pushed to any
+  branch in the replay window.
+
+Rollback (one minute): set `require_signed_off_by = false` in `cchk.toml`, land it, re-run the
+deploy below. Immediate, root on Anubis: `sudo touch /etc/lumen-commit-check/DISABLED` (accepts
+every push, logs each one), `rm` it to re-arm.
 
 ## Tests
-`python3 -m pytest test_hook.py` (needs the wheel next to it or `CCHK_WHEEL=`): 13 push-level
-tests on a real bare repo. With the hook's refusal neutered, the 8 refusal tests fail.
+`python3 -m pytest test_hook.py` (needs the wheel next to it or `CCHK_WHEEL=`): 22 tests, 20 of
+them pushes to a real bare repo. With the hook's refusal neutered, the refusal tests fail; with
+`require_signed_off_by = false` the three sign-off tests fail; with the trailer taken out of
+install.sh's smoke message the installer test fails.

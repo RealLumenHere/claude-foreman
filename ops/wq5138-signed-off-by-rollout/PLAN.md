@@ -1,5 +1,13 @@
 # Signed-off-by rollout for the Anubis commit-check (wq#5138, follows wq#5014)
 
+> **Status 2026-11-26: enforced.** Phase 1 was deployed 2026-11-20 01:11Z (wq#5151). Phase 2 (a
+> two-week warn mode) was not built: Frank's instruction of 2026-11-26 was to turn the rule on
+> once lumen-pr was ready, and the replay recorded in `ops/wq5014-gitea-commit-check/README.md`
+> shows every commit pushed since the Phase 1 deploy carrying the trailer (155 of 155, all 13
+> repos, all branches). Web-UI merges: option (b), refused unless the trailer is typed; option
+> (a) stays available per repo. Rollback is in that README. The text below is the plan as
+> written on 2026-11-19, kept for the record.
+
 `ops/wq5014-gitea-commit-check` shipped with `require_signed_off_by = false`. If it were turned on
 today it would refuse every `lumen-pr land`, for two reasons: no fleet commit carries a sign-off, and
 the token-engine squash body (`_pr_footers`) forwarded only `Refs/Assisted-by/Generated-by/BREAKING CHANGE`.

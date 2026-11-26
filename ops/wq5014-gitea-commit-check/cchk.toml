@@ -14,10 +14,12 @@ allow_revert_commits = true
 allow_fixup_commits = false
 allow_wip_commits = false
 require_body = false
-# Ticket asks for true. OFF until the token-engine squash body carries Signed-off-by
-# (FOOTER_RE in token_engine_daemon.py drops it) and lumen-pr appends it; turning it on first
-# would refuse every `lumen-pr land`. Follow-up ticket filed with this bundle.
-require_signed_off_by = false
+# wq#5138: ON since 2026-11-26. Every commit pushed to a branch needs a `Signed-off-by:`
+# trailer, merge commits included. `lumen-pr commit` appends the house sign-off and the
+# token-engine squash/merge body carries it (live since 2026-11-20 01:11Z); the replay in
+# README.md shows 155 of 155 commits pushed since then pass. A merge made in the Gitea web
+# UI is refused unless the trailer is typed into its message box.
+require_signed_off_by = true
 # AI help is welcome when disclosed with Assisted-by:/Generated-by:; an AI tool credited as
 # Co-authored-by: (or as the author) is refused. Matches lumen-pr's wq#4798 house rule.
 ai_attribution = "disclose"
