@@ -1,0 +1,196 @@
+{
+  "_comment": "wq#4688 — design/orchestrator_verify_lane.md S3 option B + S6. Standalone settings file for the ops-apply LANE (fworker.resolve_worker_settings selects it by ticket lane, not archetype or repo, and it replaces the per-repo repos.d/ union outright, like verify-probe.json). A ticket only reaches a worker with this file after harness/ops_apply_lane.py's six spawn gates passed (manifest, report, judge PASS, precheck, backup, target). The ONLY mutation paths are the two broker verbs `fleet-exec apply-staged` and `fleet-exec docker-exec-allowlisted` (plus the `restart` they pin), whose every operand is pinned in the 0444 grant.json the spawner mints; this file therefore allows no editor-of-the-world: no python3/node/sed/awk/find/cp/mv/tee/curl/lumen-run (each can write files or open a second mutation path), no raw git apply/checkout/reset/restore/stash/push, no docker, no sudo, no systemctl beyond read verbs. Writes: reports/** in the worker's own worktree only. Bare Write/Edit are absent from allow (acceptEdits auto-approves edits not explicitly denied), so every PRIMARY tree and every home-root path is denied explicitly below in addition to guard.sh's PRIMARY_TREES wall. action_gate runs in its default (non-enforce) mode on purpose: FOREMAN_JUDGE_ENFORCE=1 lets a judge LOOSEN a RED, and the judge's say for this lane is already spent at spawn (gate 2), bound to the exact report + manifest.",
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Write(reports/**)",
+      "Edit(reports/**)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git rev-parse*)",
+      "Bash(git add reports/*)",
+      "Bash(git commit *)",
+      "Bash(/home/lumen/bin/fleet-exec apply-staged *)",
+      "Bash(/home/lumen/bin/fleet-exec docker-exec-allowlisted *)",
+      "Bash(/home/lumen/bin/fleet-exec run *)",
+      "Bash(/home/lumen/bin/fleet-exec grant)",
+      "Bash(/home/lumen/bin/wq *)",
+      "Bash(/home/lumen/bin/lumen-pr *)",
+      "Bash(/home/lumen/bin/slock *)",
+      "Bash(/home/lumen/bin/lumen_state.py *)",
+      "Bash(/home/lumen/bin/lumen_busy *)",
+      "Bash(/home/lumen/bin/mask-secrets)",
+      "Bash(python3 /home/lumen/minerva/lumen_episode.py precheck *)",
+      "Bash(python3 /home/lumen/minerva/lumen_episode.py commit *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(cd *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(sort *)",
+      "Bash(uniq *)",
+      "Bash(diff *)",
+      "Bash(echo *)",
+      "Bash(printf *)",
+      "Bash(test *)",
+      "Bash(true)",
+      "Bash(stat *)",
+      "Bash(sha256sum *)",
+      "Bash(jq *)",
+      "Bash(date*)",
+      "Bash(hostname*)",
+      "Bash(systemctl status*)",
+      "Bash(systemctl is-active*)",
+      "Bash(systemctl show*)",
+      "Bash(journalctl *)",
+      "mcp__docker__list_containers",
+      "mcp__docker__fetch_container_logs"
+    ],
+    "deny": [
+      "Bash(*reboot*)",
+      "Bash(shutdown*)",
+      "Bash(poweroff*)",
+      "Bash(halt*)",
+      "Bash(systemctl start*)",
+      "Bash(systemctl stop*)",
+      "Bash(systemctl restart*)",
+      "Bash(systemctl reload*)",
+      "Bash(systemctl disable*)",
+      "Bash(systemctl enable*)",
+      "Bash(systemctl mask*)",
+      "Bash(systemctl edit*)",
+      "Bash(systemctl daemon-reload*)",
+      "Bash(dd *)",
+      "Bash(*--remove-orphans*)",
+      "Bash(ip link set*)",
+      "Bash(macchanger*)",
+      "Bash(git push*)",
+      "Bash(git apply*)",
+      "Bash(git am*)",
+      "Bash(git checkout*)",
+      "Bash(git switch*)",
+      "Bash(git reset*)",
+      "Bash(git restore*)",
+      "Bash(git stash*)",
+      "Bash(git clean*)",
+      "Bash(git -C *)",
+      "Bash(patch *)",
+      "Bash(rm *)",
+      "Bash(docker *)",
+      "Bash(sudo *)",
+      "Bash(/home/lumen/bin/lumen-run *)",
+      "Bash(/home/lumen/bin/fleet-exec restart *)",
+      "Bash(/home/lumen/bin/fleet-exec copy *)",
+      "Bash(/home/lumen/bin/fleet-exec peer *)",
+      "Bash(claude setup-token*)",
+      "Bash(env)",
+      "Bash(env |*)",
+      "Bash(printenv*)",
+      "Read(**/.env)",
+      "Read(**/.credentials.json)",
+      "Read(**/claude_credentials.md)",
+      "Read(**/claude_credentials.md.*)",
+      "Read(/home/lumen/minerva/context/sections/*credentials*)",
+      "Read(/home/lumen/minerva/context/sections.json)",
+      "Read(/home/lumen/minerva/context/sections.json.*)",
+      "Read(/home/lumen/agent/.env)",
+      "Read(/home/lumen/.secrets/**)",
+      "Read(/home/lumen/.ssh/**)",
+      "Write(**/acceptance.json)",
+      "Edit(**/acceptance.json)",
+      "Write(/home/lumen/backups/**)",
+      "Edit(/home/lumen/backups/**)",
+      "Write(/home/lumen/foreman/**)",
+      "Edit(/home/lumen/foreman/**)",
+      "Write(/home/lumen/bin/**)",
+      "Edit(/home/lumen/bin/**)",
+      "Write(/home/lumen/minerva/**)",
+      "Edit(/home/lumen/minerva/**)",
+      "Write(/home/lumen/messenger/**)",
+      "Edit(/home/lumen/messenger/**)",
+      "Write(/home/lumen/ccc/**)",
+      "Edit(/home/lumen/ccc/**)",
+      "Write(/home/lumen/mailbot/**)",
+      "Edit(/home/lumen/mailbot/**)",
+      "Write(/home/lumen/sentinel/**)",
+      "Edit(/home/lumen/sentinel/**)",
+      "Write(/home/lumen/ntfy-data/**)",
+      "Edit(/home/lumen/ntfy-data/**)",
+      "Write(/etc/**)",
+      "Edit(/etc/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/action_gate.py hook"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Read|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/hold_gate.py"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle stop"
+          },
+          {
+            "type": "command",
+            "command": "python3 /home/lumen/foreman/harness/hooks/stop_gate.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/lumen/foreman/harness/guard.sh --lifecycle end"
+          }
+        ]
+      }
+    ]
+  }
+}

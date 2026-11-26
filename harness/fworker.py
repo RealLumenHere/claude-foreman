@@ -91,6 +91,7 @@ sys.path.insert(0, "/home/lumen/bin")
 import fleet_exec_policy
 import permission_profiles
 import review_sarif  # wq#5145: review-readonly findings -> SARIF in the run dir
+import ops_apply_lane  # wq#4688: ops-apply lane spawn gates + pinned mutation grant
 import primary_tree_guard
 from langfuse_client import emit_trace_with_span
 
@@ -2491,7 +2492,26 @@ def assert_spawn_paths(ticket_id, detail, worktree, repo, add_dirs, needs_dirs):
         needs_mod.Needs([("dir", d) for d in needs_dirs]))
 
 
-def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
+def assert_ops_apply_gates(ticket_id, ticket):
+    """wq#4688 (design/orchestrator_verify_lane.md §6): a ticket in the ops-apply lane
+    spawns only when ops_apply_lane.evaluate() passes all six gates in order; the first
+    failure is an uncharged SpawnRefused carrying that gate's code. Returns the pinned
+    grant entries for resolve_exec_grant, or None for any other lane."""
+    if not ops_apply_lane.is_ops_apply(ticket):
+        return None
+    if not os.path.isfile(ops_apply_lane.SETTINGS_FILE):
+        raise SpawnRefused("OPS_APPLY_PROFILE_MISSING",
+                           f"{ops_apply_lane.SETTINGS_FILE} absent — refusing before any gate")
+    try:
+        manifest = ops_apply_lane.evaluate(ticket_id, ticket, policy_path=FLEET_EXEC_POLICY_PATH)
+    except ops_apply_lane.GateRefusal as e:
+        raise SpawnRefused(e.code, e.summary, refused=[e.summary]) from None
+    log(f"wq#{ticket_id}: ops-apply gates 0-5 PASS ({manifest['kind']} on {manifest['node']})")
+    return ops_apply_lane.grants(manifest)
+
+
+def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None,
+                       extra_grants=None):
     """wq#1332 (§2.2 point 2, §2.4): turn a ticket's needs:ssh/copy/restart tags into
     a grant fleet-exec can enforce, refusing the SPAWN (uncharged, same class as
     assert_spawn_paths) if any tag asks for something fleet-exec-policy.yaml forbids
@@ -2504,15 +2524,22 @@ def resolve_exec_grant(ticket_id, attempt, needs, wall_clock_s, worktree=None):
     if the worker tries to call it anyway — the sandbox's own allow rule for
     fleet-exec is unconditional, so this refusal has to come from the grant, not the
     Bash allowlist)."""
+    # wq#4688: extra_grants are the ops-apply lane's pinned apply/docker_exec/restart
+    # entries (ops_apply_lane.grants), already gated by ops_apply_lane.evaluate(). They
+    # are minted even under FOREMAN_NEEDS_DISABLE=1: that switch rolls back needs-tag
+    # derivation, not a mutation lane's gates — and without the grant the broker denies.
+    extra_grants = list(extra_grants or [])
     if needs_mod.disabled():
-        return None, None, None
-    # wq#1436: the allow/deny half is capability.policy_grants — the same code the
-    # dispatcher's pre-skip asks "would this be granted?". Only the lease and the
-    # 0444 file below are fworker's.
-    grants, refused = capability.policy_grants(needs, policy_path=FLEET_EXEC_POLICY_PATH)
+        grants, refused = [], []
+    else:
+        # wq#1436: the allow/deny half is capability.policy_grants — the same code the
+        # dispatcher's pre-skip asks "would this be granted?". Only the lease and the
+        # 0444 file below are fworker's.
+        grants, refused = capability.policy_grants(needs, policy_path=FLEET_EXEC_POLICY_PATH)
     if refused:
         raise SpawnRefused("CAPABILITY_DENIED_BY_POLICY", "; ".join(refused),
                            worktree=worktree, refused=refused)
+    grants = grants + [g for g in extra_grants if g not in grants]
     if not grants:
         return None, None, None
     expires = (datetime.now(timezone.utc) + timedelta(seconds=wall_clock_s)).strftime(
@@ -2923,7 +2950,7 @@ def close_review_readonly(ticket_id, result_text, repo=None):
     return out
 
 
-def resolve_worker_settings(repo, ticket_id, archetype=None):
+def resolve_worker_settings(repo, ticket_id, archetype=None, lane=None):
     """ISSUE-SOLUTIONS-fable.md §2b: render this repo's per-repo toolchain permission
     profile (permission-profiles/repos.d/<repo>.json) into the ticket's run_dir, unioned
     from the shared profile fragments. A repo with no profile declaration yet falls back
@@ -2931,7 +2958,16 @@ def resolve_worker_settings(repo, ticket_id, archetype=None):
     verify-probe overrides the per-repo profile outright (see VERIFY_PROBE_SETTINGS_FILE).
     verify-pass instead keeps the per-repo profile and adds ARCHETYPE_EXTRA_ALLOW's
     rules on top (wq#4762) — it stays build-worker-shaped for everything else.
+    wq#4688: the ops-apply LANE wins over any archetype — its pack is the lane's whole
+    permission story (ops_apply_lane.SETTINGS_FILE); a missing file refuses the spawn
+    rather than falling back to a wider pack.
     """
+    if lane == ops_apply_lane.LANE:
+        if not os.path.isfile(ops_apply_lane.SETTINGS_FILE):
+            raise SpawnRefused("OPS_APPLY_PROFILE_MISSING",
+                               f"{ops_apply_lane.SETTINGS_FILE} absent — the ops-apply lane "
+                               f"never falls back to a wider permission pack")
+        return ops_apply_lane.SETTINGS_FILE
     if archetype == "verify-probe":
         return VERIFY_PROBE_SETTINGS_FILE
     if archetype == permission_profiles.REVIEW_READONLY_ARCHETYPE:
@@ -4653,6 +4689,18 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     ticket_id = args.ticket
     ticket = wq_show(ticket_id)
     archetype = args.archetype or "standard-engineering"
+    # wq#4688: the ops-apply lane's six spawn gates, before any worktree or token exists
+    # and on EVERY attempt/resume (a backup of the pre-apply state stops matching once a
+    # patch is live, so a re-spawn after a successful apply refuses instead of re-applying).
+    ops_apply_grants = assert_ops_apply_gates(ticket_id, ticket)
+    if ops_apply_grants is not None and (is_local_rung(args.model)
+                                         or runtime_of(args) != "claude"):
+        # the lane's whole permission story is ops-apply.json under `claude -p`; a local
+        # rung or the aider/sdk runtimes do not run under that pack, so they never get
+        # this grant.
+        raise SpawnRefused("OPS_APPLY_RUNTIME",
+                           f"ops-apply lane runs only on a cloud `claude -p` rung, not "
+                           f"{args.model} / runtime {runtime_of(args)}")
     # wq#869: whoever holds the ticket as this attempt starts — the baseline a
     # CLAIM_ERROR sentinel is corroborated against below. Captured here rather than
     # assumed to be wq_identity() so a resumed attempt compares against the claim it
@@ -4741,7 +4789,11 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
         # §3.2 last clause: refuse (uncharged) while zero tokens are spent, not after
         # a burned attempt — the wq#1152 signature is a cited path the sandbox can't
         # reach. A resume reuses a worktree that already passed this gate.
-        assert_spawn_capability(ticket_id, ticket, worktree, args.repo, add_dirs,
+        # wq#4688: an ops-apply manifest's paths are broker operands (grant.json), not
+        # read citations — strip the block before the cited-path reachability wall.
+        cap_ticket = (dict(ticket, detail=ops_apply_lane.strip_manifest(ticket.get("detail")))
+                      if ops_apply_grants is not None else ticket)
+        assert_spawn_capability(ticket_id, cap_ticket, worktree, args.repo, add_dirs,
                                 ticket_needs)
 
     # wq#1332 (§2.2 point 2): resolved every attempt (not just fresh spawns) so a
@@ -4749,7 +4801,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # attempt's — raises SpawnRefused (uncharged) if a needs:copy/restart tag asks
     # for something fleet-exec-policy.yaml forbids outright.
     grant, grant_sha, grant_path = resolve_exec_grant(ticket_id, attempt, ticket_needs,
-                                                       wall_clock, worktree=worktree)
+                                                       wall_clock, worktree=worktree,
+                                                       extra_grants=ops_apply_grants)
 
     prior_notes_path = os.path.join(run_dir(ticket_id), "prior-attempt-notes.md")
     # §1a: criteria are machine-checkable and pinned BEFORE the worker starts, so the
@@ -4863,7 +4916,8 @@ def do_attempt(args, attempt, resume_session=None, prior_worktree=None, steer=No
     # exit, after close_review_readonly() has closed the ticket from the SARIF.
     if exit_gate_enforced and archetype != review_sarif.ARCHETYPE:
         env["FOREMAN_EXIT_GATE_PROTOCOL"] = "1"
-    settings_file = resolve_worker_settings(args.repo, ticket_id, archetype=archetype)
+    settings_file = resolve_worker_settings(args.repo, ticket_id, archetype=archetype,
+                                            lane=ticket.get("lane"))
     # wq#4765 (§2.3 step 6, §2.7 F9): a grant-approved resume spawns with --resume <sid>
     # and NO prompt — the CLI drops the deferred call if a resume carries one, so
     # grant_resume forces prompt=None here regardless of what load_worker_prompt built.
@@ -6182,6 +6236,11 @@ def cmd_run(args):
     # machine (diagnose/hold/apply), not do_attempt()'s retry ladder. See FIRE_MODE.md.
     if args.archetype == FIRE_ARCHETYPE:
         try:
+            if ops_apply_lane.is_ops_apply(wq_show(args.ticket)):
+                # wq#4688: fire-mode's diagnose/apply children run on the per-repo pack;
+                # an ops-apply ticket must never reach a mutation path through it.
+                raise SpawnRefused("OPS_APPLY_ARCHETYPE",
+                                   "ops-apply lane tickets never run as fire-response")
             return run_fire_ticket(args)
         except SpawnRefused as e:
             return handle_spawn_refused(args, args.ticket, e)

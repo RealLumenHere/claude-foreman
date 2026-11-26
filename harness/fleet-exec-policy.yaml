@@ -194,6 +194,30 @@ allow:
   # Reachability was not verifiable from the worker sandbox (raw ssh off the allowlist).
   ssh: [lumen, isis, bes, anubis, maat, sobek, hathor, ptah, sekhmet, horus, neith, khnum, maksoor]
 
+  # wq#4688 (design/orchestrator_verify_lane.md §3 option B + §6): the ops-apply lane's two
+  # mutation verbs. Reachable ONLY through an `apply` / `docker_exec` grant entry, which only
+  # harness/ops_apply_lane.py mints after its six spawn gates pass (manifest, verify report,
+  # judge PASS bound to report+manifest, precheck, current-state backup, target) — no needs:
+  # tag can produce one. Inert until the lumen-bin half of wq#4688 (fleet-exec verbs +
+  # fleet_exec_policy.check_apply_staged/check_docker_exec) is installed: an older broker has
+  # no such verbs and ignores these keys. never.* above is untouched and still wins (thor is
+  # also THOR_HARDLOCK in code).
+  #
+  # APPLY_STAGED: exact trees (no globs, no sub-paths) a pinned, sha-checked staged patch may
+  # be applied to with uid lumen; v1 is Lumen-local only (fleet_exec_policy.
+  # APPLY_STAGED_LOCAL_NODES). /home/lumen/messenger is the wq#4624 shape (ISSUE-LOG 1575):
+  # server_v2.py patch + restart lumen-messenger (already in allow.restart[lumen]).
+  apply_staged:
+    lumen:
+      - /home/lumen/messenger
+  # DOCKER_EXEC: (container, whole-token argv prefix) pairs. ntfy ACL edits only (ISSUE-LOG
+  # 1573, wq#4619: `docker exec ntfy ntfy access everyone ccc rw`). The broker also requires
+  # the exact argv and its inverse to be pinned in the grant, and checks both against this.
+  docker_exec:
+    lumen:
+      ntfy:
+        - "ntfy access"
+
 # run: read-only probe set. Each entry is either a bare basename (argv[0] must equal
 # it exactly) or "<basename> <subcmd-pattern>" (argv[1] must fnmatch one of the
 # '|'-separated patterns). argv is never shell-joined; metacharacters, -c/bash/sh/

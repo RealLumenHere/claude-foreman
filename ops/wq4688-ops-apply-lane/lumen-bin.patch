@@ -1,0 +1,1219 @@
+diff --git a/fleet-exec b/fleet-exec
+index e5e7ffa..df8f26d 100755
+--- a/fleet-exec
++++ b/fleet-exec
+@@ -6,9 +6,15 @@ foreman/research/WORKER_EXEC_CAPABILITY_GAP.md §2.4).
+   fleet-exec copy    <node> <local-path> <remote-dir>
+   fleet-exec restart <node> <unit> [restart|reload|start]   # default: restart
+   fleet-exec peer    <node> <name> [--timeout SEC]          # wq#3200 fixed-argv exec
++  fleet-exec apply-staged <node> <tree>                     # wq#4688 ops-apply lane only
++  fleet-exec docker-exec-allowlisted <node> <container> -- <argv...>  # wq#4688 ops-apply lane only
+   fleet-exec grant                                          # print this worker's grant
+ 
+-v1 verbs: run, copy, restart, peer. sudo/bench/power are v2 (fleet_exec_policy.py
++v1 verbs: run, copy, restart, peer. ops-apply lane verbs (wq#4688): apply-staged,
++docker-exec-allowlisted — mutation verbs whose every operand is pinned in an
++`apply`/`docker_exec` grant entry that only the ops-apply lane spawner mints, each
++ending in a post-check whose mismatch restores the backup (or runs the pinned inverse
++argv) and `wq block`s the ticket. sudo/bench/power are v2 (fleet_exec_policy.py
+ already has their check_* functions so the policy matrix is provable now; this CLI
+ just doesn't expose the subcommands yet).
+ 
+@@ -44,11 +50,13 @@ import re
+ import shlex
+ import subprocess
+ import sys
++import tempfile
+ import time
+ from datetime import datetime, timedelta, timezone
+ 
+ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+ import fleet_exec_policy as P
++import ops_apply_staged as S
+ 
+ POLICY_PATH = os.environ.get("FLEET_EXEC_POLICY_PATH", "/home/lumen/foreman/harness/fleet-exec-policy.yaml")
+ AUDIT_PATH = os.environ.get("FLEET_EXEC_AUDIT_PATH", "/home/lumen/foreman/events/fleet-exec.jsonl")
+@@ -489,6 +497,248 @@ def cmd_peer(args, grant, ticket, attempt, worker):
+     sys.exit(p.returncode)
+ 
+ 
++# ---------------------------------------------------------------------------
++# ops-apply lane verbs (wq#4688, foreman design/orchestrator_verify_lane.md §3 option B
++# + §6). Reachable only with an `apply` / `docker_exec` grant entry, which only the
++# ops-apply lane spawner mints (foreman harness/ops_apply_lane.py) after its five gates
++# pass. Every operand the verb acts on — patch bytes (by sha256), backup, unit, exact
++# docker argv, inverse argv, post-check — is PINNED in that 0444, sha-checked grant; the
++# worker only chooses whether to invoke the verb. Post-check mismatch => restore +
++# `wq block`, never a retry.
++# ---------------------------------------------------------------------------
++
++WQ_BIN = os.environ.get("FLEET_EXEC_WQ_BIN", "/home/lumen/bin/wq")
++SELF_PATH = os.path.realpath(__file__)
++POSTCHECK_BUDGET_S = 30
++EXIT_ROLLED_BACK = 3       # mutation reverted, ticket blocked
++EXIT_ROLLBACK_FAILED = 4   # revert did not verify, ticket blocked, urgent page
++
++
++def _valid_postcheck(spec):
++    if not isinstance(spec, dict) or not isinstance(spec.get("expect"), str) or not spec["expect"]:
++        return False
++    if isinstance(spec.get("http"), str):
++        return spec["http"].startswith(("http://", "https://")) and "argv" not in spec
++    argv = spec.get("argv")
++    return isinstance(argv, list) and bool(argv) and all(isinstance(a, str) for a in argv)
++
++
++def _postcheck_policy_ok(node, spec, policy):
++    """An argv post-check is a read: it must pass the same run_readonly_cmds check
++    `fleet-exec run` applies. HTTP post-checks are GET-only by construction."""
++    if spec.get("argv"):
++        return P.check_run(node, spec["argv"], policy)
++    return True, "postcheck:http_get", spec.get("http")
++
++
++def wq_block(ticket, reason):
++    """Best effort but loud: the broker's own audit line records the block attempt and
++    its result, so a failed `wq block` is visible rather than silently dropped."""
++    argv = [WQ_BIN, "block", str(ticket), reason[:900], "--no-probe",
++            "ops-apply rollback: orchestrator must review the failed post-check"]
++    try:
++        p = run_local(argv, timeout=60)
++        return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()[:240]
++    except (OSError, subprocess.TimeoutExpired) as e:
++        return 1, f"wq block failed: {e}"
++
++
++def restart_via_broker(node, unit):
++    """Re-enter this broker's own `restart` verb (holddown, verify-before/after, rescue
++    start, audit) instead of duplicating it. Same env, so the same grant decides."""
++    try:
++        p = run_local([sys.executable, SELF_PATH, "restart", node, unit], timeout=180)
++        return p.returncode, ((p.stdout or "") + (p.stderr or "")).strip()[:240]
++    except (OSError, subprocess.TimeoutExpired) as e:
++        return 1, f"restart via broker failed: {e}"
++
++
++def run_postcheck(node, spec):
++    t0 = time.time()
++
++    def run_argv(argv):
++        p = run_ssh(node, argv, timeout=60)
++        return p.returncode, (p.stdout or "") + (p.stderr or "")
++    ok, detail = S.postcheck(spec, budget_s=POSTCHECK_BUDGET_S, run_argv=run_argv)
++    return ok, detail, time.time() - t0
++
++
++def cmd_apply_staged(args, grant, ticket, attempt, worker):
++    node, tree = args.node, args.tree
++    argv = [tree]
++    verb = "apply-staged"
++    policy = load_policy_or_die(ticket, attempt, worker, node, verb, argv)
++    check_node_known(ticket, attempt, worker, node, verb, argv)
++    entries = [g for g in P.find_grants(grant, "apply", node) if g.get("tree") == tree]
++    if len(entries) != 1:
++        deny(ticket, attempt, worker, node, verb, argv, "grant:no_apply_tree",
++             f"expected exactly one apply grant for {node}:{tree}, found {len(entries)}")
++    g = entries[0]
++    ok, rule, reason = P.check_apply_staged(node, tree, policy)
++    if not ok:
++        deny(ticket, attempt, worker, node, verb, argv, rule, reason)
++    patch_path, patch_sha, backup = g.get("patch"), g.get("patch_sha256"), g.get("backup")
++    unit, spec = g.get("restart"), g.get("postcheck")
++    if not (isinstance(patch_path, str) and patch_path.startswith("/") and S.is_sha256(patch_sha)
++            and isinstance(backup, str) and backup.startswith("/") and _valid_postcheck(spec)
++            and (unit is None or isinstance(unit, str))):
++        deny(ticket, attempt, worker, node, verb, argv, "grant:apply_entry_invalid",
++             "apply grant must pin patch, patch_sha256, backup and a postcheck")
++    ok, rule_pc, reason = _postcheck_policy_ok(node, spec, policy)
++    if not ok:
++        deny(ticket, attempt, worker, node, verb, argv, rule_pc, f"postcheck: {reason}")
++    if unit:
++        if not any(r.get("unit") == unit for r in P.find_grants(grant, "restart", node)):
++            deny(ticket, attempt, worker, node, verb, argv, "grant:no_restart_unit",
++                 f"apply pins restart {unit} but the grant has no restart entry for it")
++        ok, rule_r, reason = P.check_restart(node, unit, policy)
++        if not ok:
++            deny(ticket, attempt, worker, node, verb, argv, rule_r, reason)
++    # TOCTOU: hash once, then apply from a private 0600 copy of exactly those bytes.
++    try:
++        with open(patch_path, "rb") as f:
++            patch_bytes = f.read()
++    except OSError as e:
++        deny(ticket, attempt, worker, node, verb, argv, "apply:patch_unreadable", str(e))
++    if S.sha256_bytes(patch_bytes) != patch_sha:
++        deny(ticket, attempt, worker, node, verb, argv, "apply:patch_sha_mismatch",
++             f"{patch_path} no longer matches the pinned sha256 {patch_sha[:12]}…")
++    try:
++        S.verify_backup(tree, patch_bytes, backup, expected_patch_sha=patch_sha)
++    except S.StagedError as e:
++        deny(ticket, attempt, worker, node, verb, argv, f"apply:{e.code.lower()}", e.message)
++    fd, private = tempfile.mkstemp(prefix=f"ops-apply-wq{ticket}-", suffix=".patch")
++    try:
++        with os.fdopen(fd, "wb") as f:
++            f.write(patch_bytes)
++        _apply_staged_locked(args, ticket, attempt, worker, node, tree, argv, verb, rule,
++                             private, patch_sha, backup, unit, spec)
++    finally:
++        try:
++            os.remove(private)
++        except OSError:
++            pass
++
++
++def _apply_staged_locked(args, ticket, attempt, worker, node, tree, argv, verb, rule,
++                         private, patch_sha, backup, unit, spec):
++    t0 = time.time()
++    # backup paths are tree-relative and `git apply` resolves patch paths from the repo
++    # top-level, so the two only agree when the tree IS a top-level.
++    top = run_local(["git", "-C", tree, "rev-parse", "--show-toplevel"], timeout=30)
++    if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(tree):
++        deny(ticket, attempt, worker, node, verb, argv, "apply:tree_not_toplevel",
++             f"{tree} is not a git top-level ({(top.stdout or top.stderr).strip()[:120]!r})")
++    chk = run_local(["git", "-C", tree, "apply", "--check", "--", private], timeout=60)
++    if chk.returncode != 0:
++        deny(ticket, attempt, worker, node, verb, argv, "apply:check_failed",
++             f"git apply --check refused (nothing changed): {(chk.stderr or chk.stdout).strip()[:300]}")
++    audit(P.audit_record(ticket=ticket, attempt=attempt, worker=worker, node=node, verb=verb,
++                          argv=argv, decision="allow", rule=rule,
++                          out_head=f"patch={patch_sha[:12]} backup={backup} restart={unit}"))
++    ap = run_local(["git", "-C", tree, "apply", "--", private], timeout=60)
++    failure = None
++    if ap.returncode != 0:
++        failure = f"git apply exited {ap.returncode}: {(ap.stderr or ap.stdout).strip()[:200]}"
++    restart_detail = None
++    if failure is None and unit:
++        rc, restart_detail = restart_via_broker(node, unit)
++        if rc != 0:
++            failure = f"restart {unit} exited {rc}: {restart_detail}"
++    pc_detail = None
++    if failure is None:
++        ok, pc_detail, _ = run_postcheck(node, spec)
++        if not ok:
++            failure = f"postcheck mismatch: {pc_detail}"
++    if failure is None:
++        audit(P.audit_record(ticket=ticket, attempt=attempt, worker=worker, node=node,
++                              verb=verb, argv=argv, decision="allow", rule="apply:postcheck_ok",
++                              exit_code=0, elapsed_s=time.time() - t0, verified=True,
++                              out_head=pc_detail[:240]))
++        print(f"fleet-exec: applied {patch_sha[:12]} to {tree}"
++              f"{f', restarted {unit}' if unit else ''}; post-check ok: {pc_detail}")
++        sys.exit(0)
++    # ---- rollback: restore the verified backup, reload the unit, block the ticket ----
++    restored, restore_detail = S.restore_backup(tree, backup)
++    re_rc, re_detail = (restart_via_broker(node, unit) if unit else (0, "no unit"))
++    outcome = "rolled-back" if restored else "ROLLBACK-FAILED"
++    reason = (f"ops-apply:postcheck-failed ({outcome}) wq#{ticket} {tree}: {failure}; "
++              f"{restore_detail}; re-restart rc={re_rc}")
++    block_rc, block_out = wq_block(ticket, reason)
++    audit(P.audit_record(ticket=ticket, attempt=attempt, worker=worker, node=node, verb=verb,
++                          argv=argv, decision="allow",
++                          rule="apply:rolled_back" if restored else "apply:rollback_failed",
++                          exit_code=EXIT_ROLLED_BACK if restored else EXIT_ROLLBACK_FAILED,
++                          elapsed_s=time.time() - t0, verified=False,
++                          out_head=f"{failure[:120]} | {restore_detail[:60]} | block rc={block_rc}"))
++    notify("high" if restored else "urgent", f"ops-apply {outcome}: wq{ticket}", reason[:900])
++    print(f"fleet-exec: {reason} (wq block rc={block_rc}: {block_out})", file=sys.stderr)
++    sys.exit(EXIT_ROLLED_BACK if restored else EXIT_ROLLBACK_FAILED)
++
++
++def cmd_docker_exec(args, grant, ticket, attempt, worker):
++    node, container, argv = args.node, args.container, list(args.cmd)
++    verb = "docker-exec-allowlisted"
++    audit_argv = [container, *argv]
++    policy = load_policy_or_die(ticket, attempt, worker, node, verb, audit_argv)
++    check_node_known(ticket, attempt, worker, node, verb, audit_argv)
++    entries = [g for g in P.find_grants(grant, "docker_exec", node)
++               if g.get("container") == container and g.get("argv") == argv]
++    if len(entries) != 1:
++        deny(ticket, attempt, worker, node, verb, audit_argv, "grant:no_docker_exec",
++             f"no docker_exec grant pinning {container} {' '.join(argv)!r} on {node}")
++    g = entries[0]
++    inverse, spec = g.get("inverse_argv"), g.get("postcheck")
++    ok, rule, reason = P.check_docker_exec(node, container, argv, policy)
++    if not ok:
++        deny(ticket, attempt, worker, node, verb, audit_argv, rule, reason)
++    if not isinstance(inverse, list) or not _valid_postcheck(spec):
++        deny(ticket, attempt, worker, node, verb, audit_argv, "grant:docker_entry_invalid",
++             "docker_exec grant must pin inverse_argv and a postcheck")
++    ok, rule_i, reason = P.check_docker_exec(node, container, inverse, policy)
++    if not ok:
++        deny(ticket, attempt, worker, node, verb, audit_argv, rule_i, f"inverse: {reason}")
++    ok, rule_pc, reason = _postcheck_policy_ok(node, spec, policy)
++    if not ok:
++        deny(ticket, attempt, worker, node, verb, audit_argv, rule_pc, f"postcheck: {reason}")
++    audit(P.audit_record(ticket=ticket, attempt=attempt, worker=worker, node=node, verb=verb,
++                          argv=audit_argv, decision="allow", rule=rule))
++    t0 = time.time()
++    ssh = transport_guard(ticket, attempt, worker, node, verb, audit_argv, t0)
++    p = ssh(["docker", "exec", container, *argv])
++    out = (p.stdout or "") + (p.stderr or "")
++    failure = None if p.returncode == 0 else f"docker exec exited {p.returncode}: {out.strip()[:200]}"
++    pc_detail = None
++    if failure is None:
++        ok, pc_detail, _ = run_postcheck(node, spec)
++        if not ok:
++            failure = f"postcheck mismatch: {pc_detail}"
++    if failure is None:
++        audit(P.audit_record(ticket=ticket, attempt=attempt, worker=worker, node=node,
++                              verb=verb, argv=audit_argv, decision="allow",
++                              rule="docker_exec:postcheck_ok", exit_code=0,
++                              elapsed_s=time.time() - t0, verified=True,
++                              out_sha256=P.sha256_bytes(out.encode()), out_head=out[:240]))
++        sys.stdout.write(p.stdout)
++        sys.stderr.write(p.stderr)
++        sys.exit(0)
++    inv = ssh(["docker", "exec", container, *inverse])
++    reverted = inv.returncode == 0
++    outcome = "rolled-back" if reverted else "ROLLBACK-FAILED"
++    reason = (f"ops-apply:postcheck-failed ({outcome}) wq#{ticket} docker exec {container} "
++              f"{' '.join(argv)}: {failure}; inverse rc={inv.returncode}")
++    block_rc, block_out = wq_block(ticket, reason)
++    audit(P.audit_record(ticket=ticket, attempt=attempt, worker=worker, node=node, verb=verb,
++                          argv=audit_argv, decision="allow",
++                          rule="docker_exec:rolled_back" if reverted else "docker_exec:rollback_failed",
++                          exit_code=EXIT_ROLLED_BACK if reverted else EXIT_ROLLBACK_FAILED,
++                          elapsed_s=time.time() - t0, verified=False,
++                          out_head=f"{failure[:160]} | block rc={block_rc}"))
++    notify("high" if reverted else "urgent", f"ops-apply {outcome}: wq{ticket}", reason[:900])
++    print(f"fleet-exec: {reason} (wq block rc={block_rc}: {block_out})", file=sys.stderr)
++    sys.exit(EXIT_ROLLED_BACK if reverted else EXIT_ROLLBACK_FAILED)
++
++
+ def cmd_grant(args, grant, ticket, attempt, worker):
+     import json
+     print(json.dumps(grant, indent=2, sort_keys=True))
+@@ -519,6 +769,15 @@ def build_parser():
+     # (setsid + exit 0); the broker never holds an unbounded ssh session open.
+     pe.add_argument("--timeout", type=int, default=90, metavar="SEC")
+ 
++    ap_st = sub.add_parser("apply-staged")
++    ap_st.add_argument("node")
++    ap_st.add_argument("tree")
++
++    dx = sub.add_parser("docker-exec-allowlisted")
++    dx.add_argument("node")
++    dx.add_argument("container")
++    dx.add_argument("cmd", nargs=argparse.REMAINDER)
++
+     sub.add_parser("grant")
+     return ap
+ 
+@@ -526,7 +785,7 @@ def build_parser():
+ def main(argv=None):
+     ap = build_parser()
+     args = ap.parse_args(argv)
+-    if args.verb == "run" and args.cmd[:1] == ["--"]:
++    if args.verb in ("run", "docker-exec-allowlisted") and args.cmd[:1] == ["--"]:
+         args.cmd = args.cmd[1:]
+     grant, ticket, attempt, worker = load_context()
+     {
+@@ -534,6 +793,8 @@ def main(argv=None):
+         "copy": cmd_copy,
+         "restart": cmd_restart,
+         "peer": cmd_peer,
++        "apply-staged": cmd_apply_staged,
++        "docker-exec-allowlisted": cmd_docker_exec,
+         "grant": cmd_grant,
+     }[args.verb](args, grant, ticket, attempt, worker)
+ 
+diff --git a/fleet_exec_policy.py b/fleet_exec_policy.py
+index 5e93b23..bedede1 100644
+--- a/fleet_exec_policy.py
++++ b/fleet_exec_policy.py
+@@ -338,6 +338,71 @@ def peer_entry(node, name, policy):
+     return policy["peer_cmds"][node][name]
+ 
+ 
++# --- ops-apply lane verbs (wq#4688, foreman design/orchestrator_verify_lane.md §3 ---
++# option B + §6). Two mutation verbs, both reachable ONLY through a grant the ops-apply
++# lane spawner mints after its five gates pass (report, judge PASS, precheck, backup,
++# target). Same fail-closed shape as every check_* above: (ok, rule, reason), deny is the
++# default, never.nodes / THOR_HARDLOCK first. Neither verb reads or widens any never.* row.
++
++# apply-staged edits files in a tree with uid lumen and restores them from a backup on a
++# failed post-check. v1 is Lumen-local only: the spawner verifies the backup on Lumen's
++# filesystem before the worker exists, which it cannot do for a remote node.
++APPLY_STAGED_LOCAL_NODES = frozenset({"lumen"})
++
++_CONTAINER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
++
++
++def _never_node(node, policy):
++    return node in THOR_HARDLOCK or node in policy.get("never", {}).get("nodes", [])
++
++
++def check_apply_staged(node, tree, policy):
++    """apply-staged <node> <tree>: tree must be an exact entry of
++    allow.apply_staged[node] (no globs, no prefixes: a sub-path of an allowed tree is a
++    different tree). Absent allow.apply_staged = nothing is allowed."""
++    if _never_node(node, policy):
++        return False, "policy:never_nodes", f"{node} allows no verb except readonly run/copy"
++    if node not in APPLY_STAGED_LOCAL_NODES:
++        return False, "policy:apply_node_not_local", \
++            f"apply-staged v1 runs on {sorted(APPLY_STAGED_LOCAL_NODES)} only, not {node!r}"
++    if (not isinstance(tree, str) or not tree.startswith("/")
++            or os.path.normpath(tree) != tree or _METACHAR_RE.search(tree)):
++        return False, "policy:apply_tree_invalid", f"{tree!r} is not a normalized absolute path"
++    trees = (policy.get("allow", {}).get("apply_staged") or {}).get(node) or []
++    if tree not in trees:
++        return False, "policy:apply_tree_not_allowed", \
++            f"{tree} not in allow.apply_staged[{node}]={trees!r}"
++    return True, "policy:apply_staged", tree
++
++
++def check_docker_exec(node, container, argv, policy):
++    """docker-exec-allowlisted <node> <container> -- <argv>: (container, argv-prefix)
++    pairs from allow.docker_exec[node][container]. A prefix is whole tokens ("ntfy
++    access" admits ["ntfy", "access", ...], never ["ntfy", "accessx"]). argv passes the
++    shared shape check (no metacharacters, bare argv[0]), never carries -c, and is never
++    an interpreter. Absent allow.docker_exec = nothing is allowed."""
++    if _never_node(node, policy):
++        return False, "policy:never_nodes", f"{node} allows no verb except readonly run/copy"
++    if not isinstance(container, str) or not _CONTAINER_RE.match(container):
++        return False, "policy:docker_container_invalid", f"{container!r} is not a container name"
++    shape_err = check_argv_shape(argv)
++    if shape_err:
++        return False, f"argv:{shape_err}", "argv shape rejected before allowlist"
++    if "-c" in argv[1:]:
++        return False, "policy:dash_c_denied", "-c is never allowed for docker-exec"
++    base = _basename(argv[0])
++    if base in _SHELL_ESCAPE_BASENAMES:
++        return False, "policy:shell_escape_basename", f"{base} is never a docker-exec target"
++    by_node = (policy.get("allow", {}).get("docker_exec") or {}).get(node) or {}
++    prefixes = (by_node.get(container) or []) if isinstance(by_node, dict) else []
++    for prefix in prefixes:
++        toks = str(prefix).split()
++        if toks and argv[:len(toks)] == toks:
++            return True, "policy:docker_exec", prefix
++    return False, "policy:docker_exec_not_allowed", \
++        f"{container}: {' '.join(argv)!r} matches no allow.docker_exec[{node}][{container}] prefix"
++
++
+ def audit_record(*, ticket, attempt, worker, node, verb, argv, decision, rule,
+                   exit_code=None, elapsed_s=None, out_sha256=None, out_head=None,
+                   ts=None, before=None, after=None, verified=None, grant_sha=None):
+diff --git a/ops_apply_staged.py b/ops_apply_staged.py
+new file mode 100644
+index 0000000..e21c788
+--- /dev/null
++++ b/ops_apply_staged.py
+@@ -0,0 +1,287 @@
++"""ops_apply_staged — the backup/patch/post-check half of the ops-apply lane (wq#4688,
++foreman design/orchestrator_verify_lane.md §3 option B + §6).
++
++Shared by two callers that must agree byte-for-byte:
++  * fleet-exec `apply-staged` (the broker verb that edits a tree and rolls it back), and
++  * foreman harness/ops_apply_lane.py (the spawner's BACKUP gate, run before the worker
++    exists, and the orchestrator's `backup` helper that makes the backup in the first
++    place).
++
++A backup is a directory the broker can restore from without guessing:
++
++    <backup>/ops-apply-backup.json   {"version": 1, "tree": ..., "patch_sha256": ...,
++                                      "files": {"<rel>": "<sha256>" | null}}
++    <backup>/files/<rel>             a copy of every file the patch modifies or deletes
++
++`null` marks a file the patch creates (restore deletes it). verify_backup() checks the
++backup against the LIVE tree, not against a timestamp: every recorded sha must equal
++the live file right now, so a backup taken before someone else changed the file is
++refused rather than restored over their change (strictly stronger than the design's
++"backup newer than the target's mtime").
++
++v1 patch shapes are deliberately narrow: plain text modify/create/delete of regular
++files inside the tree. Renames, copies, mode changes, symlinks, binary hunks, quoted
++(non-ASCII/space) paths and any path that leaves the tree are refused — each is a
++restore case this module would otherwise have to get right under pressure.
++
++No subprocess, no ssh: file I/O and urllib only, so both callers can unit-test it.
++"""
++import hashlib
++import json
++import os
++import re
++import shutil
++import tempfile
++import time
++import urllib.request
++
++BACKUP_MANIFEST = "ops-apply-backup.json"
++BACKUP_FILES_DIR = "files"
++BACKUP_VERSION = 1
++
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_DIFF_GIT_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)$")
++_REFUSED_HEADERS = (
++    ("rename from", "rename"), ("rename to", "rename"),
++    ("copy from", "copy"), ("copy to", "copy"),
++    ("old mode", "mode change"), ("new mode", "mode change"),
++    ("GIT binary patch", "binary"), ("Binary files", "binary"),
++)
++_OK_FILE_MODES = ("100644", "100755")
++
++
++class StagedError(Exception):
++    """One refusal; `code` is the machine-readable tag both callers log."""
++
++    def __init__(self, code, message):
++        super().__init__(f"{code}: {message}")
++        self.code = code
++        self.message = message
++
++
++def sha256_bytes(data):
++    return hashlib.sha256(data).hexdigest()
++
++
++def sha256_file(path):
++    """sha256 of a regular file, None if absent. A symlink or non-regular file is a
++    refusal, never followed: the backup must describe exactly what restore rewrites."""
++    if not os.path.lexists(path):
++        return None
++    if os.path.islink(path) or not os.path.isfile(path):
++        raise StagedError("STAGED_NOT_REGULAR", f"{path} is not a regular file")
++    with open(path, "rb") as f:
++        return sha256_bytes(f.read())
++
++
++def is_sha256(value):
++    return isinstance(value, str) and bool(_SHA256_RE.match(value))
++
++
++def _safe_rel(rel):
++    if (not rel or rel.startswith("/") or "\\" in rel
++            or any(part in ("", ".", "..") for part in rel.split("/"))):
++        raise StagedError("STAGED_PATH_UNSAFE", f"{rel!r} is not a plain relative path")
++    if rel == ".git" or rel.startswith(".git/"):
++        raise StagedError("STAGED_PATH_UNSAFE", f"{rel!r} is inside .git")
++    return rel
++
++
++def _inside(tree, rel):
++    """Absolute path of rel under tree, refusing anything whose real parent directory
++    leaves the tree (a symlinked directory inside the tree counts as leaving)."""
++    root = os.path.realpath(tree)
++    path = os.path.join(root, rel)
++    parent = os.path.realpath(os.path.dirname(path))
++    if parent != root and not parent.startswith(root + os.sep):
++        raise StagedError("STAGED_PATH_UNSAFE", f"{rel!r} resolves outside {tree}")
++    return path
++
++
++def patch_touched_files(patch_bytes):
++    """Sorted relative paths a git-format patch touches, or StagedError. Every
++    `diff --git` section must name the same path on both sides and carry none of the
++    refused v1 shapes; a patch with no section at all is refused (nothing to apply is
++    not a successful apply)."""
++    try:
++        text = patch_bytes.decode("utf-8")
++    except UnicodeDecodeError:
++        raise StagedError("STAGED_PATCH_INVALID", "patch is not UTF-8 text") from None
++    files = []
++    for line in text.splitlines():
++        if line.startswith("diff --git "):
++            m = _DIFF_GIT_RE.match(line)
++            if not m or '"' in line:
++                raise StagedError("STAGED_PATCH_UNSUPPORTED", f"unparseable header {line[:120]!r}")
++            a, b = m.group(1), m.group(2)
++            if a != b:
++                raise StagedError("STAGED_PATCH_UNSUPPORTED", f"{a} -> {b}: renames are refused in v1")
++            files.append(_safe_rel(a))
++            continue
++        for prefix, what in _REFUSED_HEADERS:
++            if line.startswith(prefix):
++                raise StagedError("STAGED_PATCH_UNSUPPORTED", f"{what} sections are refused in v1")
++        for prefix in ("new file mode ", "deleted file mode "):
++            if line.startswith(prefix) and line[len(prefix):].strip() not in _OK_FILE_MODES:
++                raise StagedError("STAGED_PATCH_UNSUPPORTED",
++                                  f"{line.strip()!r}: only regular-file modes are allowed")
++    if not files:
++        raise StagedError("STAGED_PATCH_INVALID", "patch has no `diff --git` section")
++    if len(set(files)) != len(files):
++        raise StagedError("STAGED_PATCH_UNSUPPORTED", "patch touches the same file twice")
++    return sorted(files)
++
++
++def _read_manifest(backup_dir):
++    path = os.path.join(backup_dir, BACKUP_MANIFEST)
++    try:
++        with open(path) as f:
++            data = json.load(f)
++    except (OSError, ValueError) as e:
++        raise StagedError("BACKUP_MANIFEST_INVALID", f"{path}: {e}") from None
++    if (not isinstance(data, dict) or data.get("version") != BACKUP_VERSION
++            or not isinstance(data.get("files"), dict)):
++        raise StagedError("BACKUP_MANIFEST_INVALID", f"{path}: not a v{BACKUP_VERSION} backup manifest")
++    return data
++
++
++def make_backup(tree, patch_bytes, backup_dir):
++    """Copy every file the patch touches out of tree into a NEW backup_dir. Refuses an
++    existing backup_dir so a backup is never half-overwritten. Returns the manifest."""
++    if os.path.lexists(backup_dir):
++        raise StagedError("BACKUP_EXISTS", f"{backup_dir} already exists — pick a new path")
++    files = patch_touched_files(patch_bytes)
++    record = {}
++    os.makedirs(os.path.dirname(os.path.abspath(backup_dir)), exist_ok=True)
++    staging = tempfile.mkdtemp(prefix=".ops-apply-backup-", dir=os.path.dirname(os.path.abspath(backup_dir)))
++    try:
++        for rel in files:
++            live = _inside(tree, rel)
++            sha = sha256_file(live)
++            record[rel] = sha
++            if sha is not None:
++                dst = os.path.join(staging, BACKUP_FILES_DIR, rel)
++                os.makedirs(os.path.dirname(dst), exist_ok=True)
++                shutil.copy2(live, dst)
++                if sha256_file(dst) != sha:
++                    raise StagedError("BACKUP_COPY_MISMATCH", f"{rel} changed while being copied")
++        manifest = {"version": BACKUP_VERSION, "tree": tree,
++                    "patch_sha256": sha256_bytes(patch_bytes), "files": record,
++                    "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
++        with open(os.path.join(staging, BACKUP_MANIFEST), "w") as f:
++            json.dump(manifest, f, indent=2, sort_keys=True)
++            f.write("\n")
++        os.rename(staging, backup_dir)
++    except BaseException:
++        shutil.rmtree(staging, ignore_errors=True)
++        raise
++    return manifest
++
++
++def verify_backup(tree, patch_bytes, backup_dir, expected_patch_sha=None):
++    """Raise StagedError unless backup_dir is a complete backup of the CURRENT state of
++    every file this patch touches in tree. Returns the manifest on success."""
++    if not os.path.isdir(backup_dir) or os.path.islink(backup_dir):
++        raise StagedError("BACKUP_MISSING", f"{backup_dir} is not a directory")
++    data = _read_manifest(backup_dir)
++    patch_sha = sha256_bytes(patch_bytes)
++    if expected_patch_sha is not None and patch_sha != expected_patch_sha:
++        raise StagedError("BACKUP_PATCH_MISMATCH", "patch bytes do not match the pinned sha256")
++    if data.get("tree") != tree:
++        raise StagedError("BACKUP_TREE_MISMATCH", f"backup is of {data.get('tree')!r}, not {tree!r}")
++    if data.get("patch_sha256") != patch_sha:
++        raise StagedError("BACKUP_PATCH_MISMATCH", "backup was taken for a different patch")
++    files = patch_touched_files(patch_bytes)
++    if sorted(data["files"]) != files:
++        raise StagedError("BACKUP_INCOMPLETE",
++                          f"backup lists {sorted(data['files'])}, patch touches {files}")
++    for rel, sha in data["files"].items():
++        live = _inside(tree, rel)
++        live_sha = sha256_file(live)
++        if sha is None:
++            if live_sha is not None:
++                raise StagedError("BACKUP_STALE", f"{rel} exists now but the backup says the patch creates it")
++            continue
++        if not is_sha256(sha):
++            raise StagedError("BACKUP_MANIFEST_INVALID", f"{rel}: bad sha256 {sha!r}")
++        copy_sha = sha256_file(os.path.join(backup_dir, BACKUP_FILES_DIR, rel))
++        if copy_sha != sha:
++            raise StagedError("BACKUP_INCOMPLETE", f"{rel}: backup copy missing or altered")
++        if live_sha != sha:
++            raise StagedError("BACKUP_STALE", f"{rel}: live file differs from the backup "
++                                              f"(changed since the backup was taken)")
++    return data
++
++
++def restore_backup(tree, backup_dir):
++    """Put every recorded file back (atomic replace per file) and delete the ones the
++    patch created; then re-hash. Returns (ok, detail) — never raises, because the
++    caller is already on its failure path and must still block the ticket."""
++    try:
++        data = _read_manifest(backup_dir)
++        for rel, sha in sorted(data["files"].items()):
++            live = _inside(tree, _safe_rel(rel))
++            if sha is None:
++                if os.path.lexists(live):
++                    os.remove(live)
++                continue
++            src = os.path.join(backup_dir, BACKUP_FILES_DIR, rel)
++            os.makedirs(os.path.dirname(live), exist_ok=True)
++            fd, tmp = tempfile.mkstemp(prefix=".ops-apply-restore-", dir=os.path.dirname(live))
++            os.close(fd)
++            shutil.copy2(src, tmp)
++            os.replace(tmp, live)
++        bad = [rel for rel, sha in data["files"].items()
++               if sha256_file(_inside(tree, rel)) != sha]
++    except (StagedError, OSError) as e:
++        return False, f"restore error: {e}"
++    if bad:
++        return False, f"restored files still differ from backup: {bad}"
++    return True, f"restored {len(data['files'])} file(s) from {backup_dir}"
++
++
++def postcheck_once(spec, *, run_argv=None, opener=None, timeout=15):
++    """One post-check read. spec is the pinned dict {"http": url | "argv": [...],
++    "expect": substring}. Returns (ok, detail). HTTP is GET only (no body, no method
++    override); argv goes through the caller's run_argv (the broker validates it against
++    run_readonly_cmds and runs it the same way `fleet-exec run` does)."""
++    expect = spec.get("expect")
++    if not isinstance(expect, str) or not expect:
++        return False, "postcheck has no expect string"
++    if spec.get("http"):
++        url = spec["http"]
++        if not url.startswith(("http://", "https://")):
++            return False, f"postcheck url {url!r} is not http(s)"
++        req = urllib.request.Request(url, method="GET")
++        try:
++            resp = (opener or urllib.request.urlopen)(req, timeout=timeout)
++            status = getattr(resp, "status", None)
++            body = resp.read(1 << 20).decode("utf-8", "replace")
++        except Exception as e:  # noqa: BLE001 — any read failure is a mismatch, never a pass
++            return False, f"GET {url} failed: {type(e).__name__}: {e}"
++        if status != 200:
++            return False, f"GET {url} -> HTTP {status}"
++        if expect not in body:
++            return False, f"GET {url} -> 200 but {expect!r} not in body"
++        return True, f"GET {url} -> 200, {expect!r} present"
++    if spec.get("argv"):
++        if run_argv is None:
++            return False, "argv postcheck with no runner"
++        rc, out = run_argv(spec["argv"])
++        if rc != 0:
++            return False, f"{' '.join(spec['argv'])!r} exited {rc}"
++        if expect not in out:
++            return False, f"{' '.join(spec['argv'])!r} output lacks {expect!r}"
++        return True, f"{' '.join(spec['argv'])!r} ok, {expect!r} present"
++    return False, "postcheck names neither http nor argv"
++
++
++def postcheck(spec, *, budget_s=30, interval_s=2, sleep=time.sleep, clock=time.monotonic, **kw):
++    """Poll postcheck_once until it passes or budget_s runs out (a restarted unit needs a
++    few seconds to listen). Returns (ok, detail_of_last_try)."""
++    deadline = clock() + budget_s
++    while True:
++        ok, detail = postcheck_once(spec, **kw)
++        if ok or clock() >= deadline:
++            return ok, detail
++        sleep(interval_s)
+diff --git a/tests/test_fleet_exec_ops_apply.py b/tests/test_fleet_exec_ops_apply.py
+new file mode 100644
+index 0000000..434b876
+--- /dev/null
++++ b/tests/test_fleet_exec_ops_apply.py
+@@ -0,0 +1,526 @@
++"""wq#4688 (foreman design/orchestrator_verify_lane.md §3 option B + §6): the two
++ops-apply lane verbs — apply-staged and docker-exec-allowlisted — plus the
++ops_apply_staged backup/patch/post-check module they share with the foreman spawner.
++
++apply-staged runs a REAL `git apply` against a scratch git repo; only ssh, the restart
++re-entry, ntfy and wq are faked. The headline case is the design's §7 exit criterion
++for option B: a staged patch that breaks the post-check is applied, detected, rolled
++back from the verified backup, and the ticket is blocked.
++
++Run: python3 -m pytest tests/test_fleet_exec_ops_apply.py -q
++"""
++import hashlib
++import importlib.util
++import json
++import os
++import subprocess
++import sys
++from datetime import datetime, timedelta, timezone
++from importlib.machinery import SourceFileLoader
++
++import pytest
++
++HERE = os.path.dirname(os.path.abspath(__file__))
++BIN_DIR = os.path.join(HERE, "..")
++sys.path.insert(0, BIN_DIR)
++
++import fleet_exec_policy as P  # noqa: E402
++import ops_apply_staged as S  # noqa: E402
++
++_loader = SourceFileLoader("fleet_exec_cli_ops_apply", os.path.join(BIN_DIR, "fleet-exec"))
++_spec = importlib.util.spec_from_loader(_loader.name, _loader)
++fleet_exec = importlib.util.module_from_spec(_spec)
++_loader.exec_module(fleet_exec)
++
++TICKET = 4624
++
++
++def policy_dict(tree="/srv/tree"):
++    return {
++        "never": {"nodes": ["thor"], "restart": {"lumen": ["vaultwarden*", "cloudflared"]}},
++        "allow": {
++            "restart": {"lumen": ["lumen-messenger"]},
++            "apply_staged": {"lumen": [tree]},
++            "docker_exec": {"lumen": {"ntfy": ["ntfy access"]}},
++        },
++        "run_readonly_cmds": ["true", "cat"],
++    }
++
++
++# ---------------------------------------------------------------------------
++# fleet_exec_policy.check_apply_staged / check_docker_exec
++# ---------------------------------------------------------------------------
++
++def test_apply_staged_allowed_tree():
++    assert P.check_apply_staged("lumen", "/srv/tree", policy_dict())[0]
++
++
++@pytest.mark.parametrize("node,tree,rule", [
++    ("thor", "/srv/tree", "policy:never_nodes"),
++    ("isis", "/srv/tree", "policy:apply_node_not_local"),
++    ("lumen", "/srv/tree/sub", "policy:apply_tree_not_allowed"),
++    ("lumen", "/srv/other", "policy:apply_tree_not_allowed"),
++    ("lumen", "srv/tree", "policy:apply_tree_invalid"),
++    ("lumen", "/srv/tree/../tree", "policy:apply_tree_invalid"),
++    ("lumen", "/srv/tree;rm", "policy:apply_tree_invalid"),
++])
++def test_apply_staged_refusals(node, tree, rule):
++    ok, got, _ = P.check_apply_staged(node, tree, policy_dict())
++    assert not ok and got == rule
++
++
++def test_apply_staged_denied_without_allow_section():
++    pol = policy_dict()
++    del pol["allow"]["apply_staged"]
++    assert P.check_apply_staged("lumen", "/srv/tree", pol)[1] == "policy:apply_tree_not_allowed"
++
++
++def test_thor_hardlock_survives_a_policy_without_never_nodes():
++    pol = policy_dict()
++    pol["never"]["nodes"] = []
++    pol["allow"]["apply_staged"]["thor"] = ["/srv/tree"]
++    pol["allow"]["docker_exec"]["thor"] = {"ntfy": ["ntfy access"]}
++    assert P.check_apply_staged("thor", "/srv/tree", pol)[1] == "policy:never_nodes"
++    assert P.check_docker_exec("thor", "ntfy", ["ntfy", "access"], pol)[1] == "policy:never_nodes"
++
++
++def test_docker_exec_ntfy_access_allowed():
++    ok, rule, _ = P.check_docker_exec("lumen", "ntfy", ["ntfy", "access", "everyone", "ccc", "rw"],
++                                      policy_dict())
++    assert ok and rule == "policy:docker_exec"
++
++
++@pytest.mark.parametrize("container,argv,rule", [
++    ("ntfy", ["ntfy", "accessx", "everyone"], "policy:docker_exec_not_allowed"),
++    ("ntfy", ["ntfy", "user", "add", "x"], "policy:docker_exec_not_allowed"),
++    ("ntfy", ["ntfy"], "policy:docker_exec_not_allowed"),
++    ("litellm", ["ntfy", "access"], "policy:docker_exec_not_allowed"),
++    ("ntfy", ["sh", "-c", "ntfy access"], "policy:dash_c_denied"),
++    ("ntfy", ["sh", "ntfy"], "policy:shell_escape_basename"),
++    ("ntfy", ["ntfy", "access", "a;b"], "argv:argv_metachar"),
++    ("ntfy", ["/bin/ntfy", "access"], "argv:argv0_not_basename"),
++    ("-it", ["ntfy", "access"], "policy:docker_container_invalid"),
++    ("ntfy", [], "argv:argv_empty"),
++])
++def test_docker_exec_refusals(container, argv, rule):
++    ok, got, _ = P.check_docker_exec("lumen", container, argv, policy_dict())
++    assert not ok and got == rule
++
++
++# ---------------------------------------------------------------------------
++# ops_apply_staged: patch shapes, backup make/verify/restore
++# ---------------------------------------------------------------------------
++
++def git(tree, *args, check=True):
++    return subprocess.run(["git", "-C", str(tree), *args], capture_output=True, text=True,
++                          check=check)
++
++
++def make_tree(path):
++    path.mkdir()
++    git(path, "init", "-q")
++    git(path, "config", "user.email", "t@lumen")
++    git(path, "config", "user.name", "t")
++    (path / "app.txt").write_text("version=1\n")
++    (path / "keep.txt").write_text("untouched\n")
++    git(path, "add", ".")
++    git(path, "commit", "-q", "-m", "init")
++    return path
++
++
++def staged_patch(tree, edits, out):
++    """Make `edits` ({rel: new_text|None}) in tree, capture `git diff` (with new files
++    via intent-to-add), then reset the tree — the patch is staged, the tree is untouched."""
++    for rel, text in edits.items():
++        p = tree / rel
++        if text is None:
++            p.unlink()
++            continue
++        created = not p.exists()
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_text(text)
++        if created:
++            git(tree, "add", "-N", "--", rel)
++    diff = git(tree, "diff").stdout
++    git(tree, "reset", "-q")
++    git(tree, "checkout", "-q", "--", ".")
++    git(tree, "clean", "-qfd")
++    out.write_text(diff)
++    return out
++
++
++def test_patch_touched_files_modify_create_delete(tmp_path):
++    tree = make_tree(tmp_path / "t")
++    p = staged_patch(tree, {"app.txt": "version=2\n", "new/n.txt": "n\n", "keep.txt": None},
++                     tmp_path / "p.patch")
++    assert S.patch_touched_files(p.read_bytes()) == ["app.txt", "keep.txt", "new/n.txt"]
++
++
++@pytest.mark.parametrize("patch,code", [
++    (b"", "STAGED_PATCH_INVALID"),
++    (b"diff --git a/x b/y\nrename from x\nrename to y\n", "STAGED_PATCH_UNSUPPORTED"),
++    (b"diff --git a/x b/x\nold mode 100644\nnew mode 100755\n", "STAGED_PATCH_UNSUPPORTED"),
++    (b"diff --git a/x b/x\nGIT binary patch\n", "STAGED_PATCH_UNSUPPORTED"),
++    (b"diff --git a/x b/x\nnew file mode 120000\n", "STAGED_PATCH_UNSUPPORTED"),
++    (b'diff --git "a/x y" "b/x y"\n', "STAGED_PATCH_UNSUPPORTED"),
++    (b"diff --git a/../x b/../x\n", "STAGED_PATH_UNSAFE"),
++    (b"diff --git a/.git/config b/.git/config\n", "STAGED_PATH_UNSAFE"),
++    (b"diff --git a/x b/x\ndiff --git a/x b/x\n", "STAGED_PATCH_UNSUPPORTED"),
++])
++def test_patch_shapes_refused(patch, code):
++    with pytest.raises(S.StagedError) as e:
++        S.patch_touched_files(patch)
++    assert e.value.code == code
++
++
++def test_backup_roundtrip_restores_modify_create_delete(tmp_path):
++    tree = make_tree(tmp_path / "t")
++    patch = staged_patch(tree, {"app.txt": "version=2\n", "new/n.txt": "n\n", "keep.txt": None},
++                         tmp_path / "p.patch").read_bytes()
++    backup = tmp_path / "bk" / "wq1"
++    S.make_backup(str(tree), patch, str(backup))
++    S.verify_backup(str(tree), patch, str(backup), expected_patch_sha=S.sha256_bytes(patch))
++    tmp = tmp_path / "apply.patch"
++    tmp.write_bytes(patch)
++    git(tree, "apply", "--", str(tmp))
++    assert (tree / "app.txt").read_text() == "version=2\n"
++    assert not (tree / "keep.txt").exists() and (tree / "new/n.txt").exists()
++    ok, detail = S.restore_backup(str(tree), str(backup))
++    assert ok, detail
++    assert (tree / "app.txt").read_text() == "version=1\n"
++    assert (tree / "keep.txt").read_text() == "untouched\n"
++    assert not (tree / "new/n.txt").exists()
++    assert git(tree, "status", "--porcelain", "--untracked-files=no").stdout == ""
++
++
++def test_make_backup_refuses_existing_dir(tmp_path):
++    tree = make_tree(tmp_path / "t")
++    patch = staged_patch(tree, {"app.txt": "v2\n"}, tmp_path / "p.patch").read_bytes()
++    (tmp_path / "bk").mkdir()
++    with pytest.raises(S.StagedError) as e:
++        S.make_backup(str(tree), patch, str(tmp_path / "bk"))
++    assert e.value.code == "BACKUP_EXISTS"
++
++
++@pytest.mark.parametrize("mutate,code", [
++    ("live_changed", "BACKUP_STALE"),
++    ("copy_altered", "BACKUP_INCOMPLETE"),
++    ("other_patch", "BACKUP_PATCH_MISMATCH"),
++    ("other_tree", "BACKUP_TREE_MISMATCH"),
++    ("no_manifest", "BACKUP_MANIFEST_INVALID"),
++    ("created_exists", "BACKUP_STALE"),
++])
++def test_verify_backup_refusals(tmp_path, mutate, code):
++    tree = make_tree(tmp_path / "t")
++    patch = staged_patch(tree, {"app.txt": "version=2\n", "new.txt": "n\n"},
++                         tmp_path / "p.patch").read_bytes()
++    backup = tmp_path / "bk"
++    S.make_backup(str(tree), patch, str(backup))
++    check_patch = patch
++    check_tree = str(tree)
++    if mutate == "live_changed":
++        (tree / "app.txt").write_text("someone else's edit\n")
++    elif mutate == "copy_altered":
++        (backup / "files" / "app.txt").write_text("tampered\n")
++    elif mutate == "other_patch":
++        check_patch = patch.replace(b"version=2", b"version=3")
++    elif mutate == "other_tree":
++        check_tree = str(tmp_path / "elsewhere")
++    elif mutate == "no_manifest":
++        (backup / S.BACKUP_MANIFEST).unlink()
++    elif mutate == "created_exists":
++        (tree / "new.txt").write_text("appeared\n")
++    with pytest.raises(S.StagedError) as e:
++        S.verify_backup(check_tree, check_patch, str(backup))
++    assert e.value.code == code
++
++
++def test_verify_backup_missing_dir(tmp_path):
++    with pytest.raises(S.StagedError) as e:
++        S.verify_backup("/x", b"diff --git a/a b/a\n", str(tmp_path / "nope"))
++    assert e.value.code == "BACKUP_MISSING"
++
++
++class _Resp:
++    def __init__(self, status, body):
++        self.status, self._body = status, body
++
++    def read(self, n=-1):
++        return self._body
++
++
++def test_postcheck_http_and_argv():
++    ok, _ = S.postcheck_once({"http": "http://x/wq", "expect": "detail"},
++                             opener=lambda req, timeout: _Resp(200, b'{"detail": 1}'))
++    assert ok
++    ok, d = S.postcheck_once({"http": "http://x/wq", "expect": "detail"},
++                             opener=lambda req, timeout: _Resp(500, b"detail"))
++    assert not ok and "500" in d
++    ok, _ = S.postcheck_once({"argv": ["cat", "f"], "expect": "v2"}, run_argv=lambda a: (0, "v2\n"))
++    assert ok
++    ok, _ = S.postcheck_once({"argv": ["cat", "f"], "expect": "v2"}, run_argv=lambda a: (0, "v1\n"))
++    assert not ok
++    assert not S.postcheck_once({"http": "file:///etc/passwd", "expect": "root"})[0]
++    assert not S.postcheck_once({"http": "http://x", "expect": ""})[0]
++
++
++def test_postcheck_polls_until_budget():
++    calls = []
++    clock = iter([0, 0, 1, 2, 3, 100]).__next__
++    ok, _ = S.postcheck({"argv": ["cat", "f"], "expect": "v2"}, budget_s=5, interval_s=0,
++                        sleep=lambda s: None, clock=clock,
++                        run_argv=lambda a: (calls.append(1), (0, "v2" if len(calls) == 3 else "v1"))[1])
++    assert ok and len(calls) == 3
++
++
++# ---------------------------------------------------------------------------
++# CLI: apply-staged / docker-exec-allowlisted end to end
++# ---------------------------------------------------------------------------
++
++def read_jsonl(path):
++    if not os.path.exists(path):
++        return []
++    with open(path) as f:
++        return [json.loads(line) for line in f if line.strip()]
++
++
++def write_policy(tmp_path, tree):
++    import yaml
++    path = tmp_path / "policy.yaml"
++    path.write_text(yaml.safe_dump(policy_dict(str(tree))))
++    return str(path)
++
++
++def set_grant(monkeypatch, tmp_path, grants):
++    grant = {"ticket": TICKET, "attempt": 1,
++             "expires": (datetime.now(timezone.utc) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
++             "grants": grants}
++    raw = json.dumps(grant, sort_keys=True).encode()
++    path = tmp_path / "grant.json"
++    path.write_bytes(raw)
++    monkeypatch.setenv("FOREMAN_GRANT_FILE", str(path))
++    monkeypatch.setenv("FOREMAN_GRANT_SHA", hashlib.sha256(raw).hexdigest())
++    monkeypatch.setenv("FOREMAN_ATTEMPT", "1")
++
++
++@pytest.fixture
++def cli(tmp_path, monkeypatch):
++    tree = make_tree(tmp_path / "tree")
++    calls = {"restart": [], "wq": [], "ntfy": [], "ssh": []}
++    monkeypatch.setattr(fleet_exec, "POLICY_PATH", write_policy(tmp_path, tree))
++    monkeypatch.setattr(fleet_exec, "AUDIT_PATH", str(tmp_path / "audit.jsonl"))
++    monkeypatch.setattr(fleet_exec, "WORKER_AUDIT_PATH", None)
++    monkeypatch.setattr(fleet_exec, "POSTCHECK_BUDGET_S", 0)
++    monkeypatch.setenv("WQ_AGENT", f"fworker-wq{TICKET}")
++    monkeypatch.setattr(fleet_exec, "known_nodes", lambda: {"lumen", "thor", "isis"})
++    monkeypatch.setattr(fleet_exec, "restart_via_broker",
++                        lambda node, unit: (calls["restart"].append((node, unit)), (0, "ok"))[1])
++    monkeypatch.setattr(fleet_exec, "wq_block",
++                        lambda ticket, reason: (calls["wq"].append((ticket, reason)), (0, "BLOCKED"))[1])
++    monkeypatch.setattr(fleet_exec, "notify", lambda *a: calls["ntfy"].append(a))
++
++    def fake_ssh(node, argv, *, input_text=None, timeout=90):
++        calls["ssh"].append((node, list(argv)))
++        if argv[:2] == ["docker", "exec"]:
++            return subprocess.CompletedProcess(argv, 0, "ok\n", "")
++        return subprocess.run(argv, capture_output=True, text=True)  # cat <file> postcheck
++    monkeypatch.setattr(fleet_exec, "run_ssh", fake_ssh)
++    return {"tree": tree, "tmp": tmp_path, "calls": calls, "audit": tmp_path / "audit.jsonl"}
++
++
++def apply_grant(cli, patch_path, backup, *, unit="lumen-messenger", expect="version=2",
++                node="lumen", tree=None):
++    tree = str(tree or cli["tree"])
++    g = [{"kind": "apply", "node": node, "tree": tree, "patch": str(patch_path),
++          "patch_sha256": S.sha256_bytes(patch_path.read_bytes()), "backup": str(backup),
++          "restart": unit,
++          "postcheck": {"argv": ["cat", os.path.join(tree, "app.txt")], "expect": expect}}]
++    if unit:
++        g.append({"kind": "restart", "node": node, "unit": unit})
++    return g
++
++
++def run_cli(argv):
++    with pytest.raises(SystemExit) as e:
++        fleet_exec.main(argv)
++    return e.value.code
++
++
++def stage(cli, edits, name="p"):
++    patch = staged_patch(cli["tree"], edits, cli["tmp"] / f"{name}.patch")
++    backup = cli["tmp"] / "backups" / name
++    S.make_backup(str(cli["tree"]), patch.read_bytes(), str(backup))
++    return patch, backup
++
++
++def test_apply_staged_success_applies_restarts_and_verifies(cli, monkeypatch):
++    patch, backup = stage(cli, {"app.txt": "version=2\n"})
++    set_grant(monkeypatch, cli["tmp"], apply_grant(cli, patch, backup))
++    assert run_cli(["apply-staged", "lumen", str(cli["tree"])]) == 0
++    assert (cli["tree"] / "app.txt").read_text() == "version=2\n"
++    assert cli["calls"]["restart"] == [("lumen", "lumen-messenger")]
++    assert cli["calls"]["wq"] == []
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "apply:postcheck_ok"
++
++
++def test_staged_broken_patch_auto_rolls_back_and_blocks(cli, monkeypatch):
++    """Design §7 exit criterion for option B: the staged patch applies cleanly but
++    breaks the post-check -> restore from the verified backup, re-restart, wq block."""
++    patch, backup = stage(cli, {"app.txt": "version=BROKEN\n", "added.txt": "x\n"})
++    set_grant(monkeypatch, cli["tmp"], apply_grant(cli, patch, backup, expect="version=2"))
++    assert run_cli(["apply-staged", "lumen", str(cli["tree"])]) == fleet_exec.EXIT_ROLLED_BACK
++    assert (cli["tree"] / "app.txt").read_text() == "version=1\n"
++    assert not (cli["tree"] / "added.txt").exists()
++    assert git(cli["tree"], "status", "--porcelain").stdout == ""
++    assert cli["calls"]["restart"] == [("lumen", "lumen-messenger")] * 2
++    (ticket, reason), = cli["calls"]["wq"]
++    assert ticket == str(TICKET) and reason.startswith("ops-apply:postcheck-failed (rolled-back)")
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "apply:rolled_back"
++    assert cli["calls"]["ntfy"][0][0] == "high"
++
++
++def test_rollback_that_cannot_verify_pages_urgent(cli, monkeypatch):
++    patch, backup = stage(cli, {"app.txt": "version=BROKEN\n"})
++    set_grant(monkeypatch, cli["tmp"], apply_grant(cli, patch, backup))
++    monkeypatch.setattr(fleet_exec.S, "restore_backup", lambda tree, bk: (False, "disk full"))
++    assert run_cli(["apply-staged", "lumen", str(cli["tree"])]) == fleet_exec.EXIT_ROLLBACK_FAILED
++    assert "ROLLBACK-FAILED" in cli["calls"]["wq"][0][1]
++    assert cli["calls"]["ntfy"][0][0] == "urgent"
++
++
++def test_failed_restart_is_rolled_back_too(cli, monkeypatch):
++    patch, backup = stage(cli, {"app.txt": "version=2\n"})
++    set_grant(monkeypatch, cli["tmp"], apply_grant(cli, patch, backup))
++    monkeypatch.setattr(fleet_exec, "restart_via_broker", lambda n, u: (1, "not active"))
++    assert run_cli(["apply-staged", "lumen", str(cli["tree"])]) == fleet_exec.EXIT_ROLLED_BACK
++    assert (cli["tree"] / "app.txt").read_text() == "version=1\n"
++
++
++def test_check_failure_changes_nothing(cli, monkeypatch):
++    patch, backup = stage(cli, {"app.txt": "version=2\n"})
++    # the backup is of the current state, but a context line no longer matches
++    (cli["tree"] / "app.txt").write_text("version=1\n")
++    bad = patch.read_text().replace(" version=1", " version=0").replace("-version=1", "-version=0")
++    patch.write_text(bad)
++    shutil_rm(backup)
++    S.make_backup(str(cli["tree"]), patch.read_bytes(), str(backup))
++    set_grant(monkeypatch, cli["tmp"], apply_grant(cli, patch, backup))
++    assert run_cli(["apply-staged", "lumen", str(cli["tree"])]) == 2
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "apply:check_failed"
++    assert (cli["tree"] / "app.txt").read_text() == "version=1\n"
++    assert cli["calls"]["restart"] == [] and cli["calls"]["wq"] == []
++
++
++def shutil_rm(path):
++    import shutil
++    shutil.rmtree(path)
++
++
++@pytest.mark.parametrize("tamper,rule", [
++    ("patch_changed", "apply:patch_sha_mismatch"),
++    ("backup_stale", "apply:backup_stale"),
++    ("no_apply_grant", "grant:no_apply_tree"),
++    ("no_restart_grant", "grant:no_restart_unit"),
++    ("crown_jewel_unit", "policy:never_restart"),
++    ("postcheck_not_readonly", "policy:not_readonly"),
++    ("missing_postcheck", "grant:apply_entry_invalid"),
++])
++def test_apply_staged_denials_change_nothing(cli, monkeypatch, tamper, rule):
++    patch, backup = stage(cli, {"app.txt": "version=2\n"})
++    grants = apply_grant(cli, patch, backup)
++    if tamper == "patch_changed":
++        patch.write_text(patch.read_text() + "\n")
++    elif tamper == "backup_stale":
++        (cli["tree"] / "app.txt").write_text("version=1\n# hand edit\n")
++    elif tamper == "no_apply_grant":
++        grants = [g for g in grants if g["kind"] != "apply"]
++    elif tamper == "no_restart_grant":
++        grants = [g for g in grants if g["kind"] != "restart"]
++    elif tamper == "crown_jewel_unit":
++        grants[0]["restart"] = "cloudflared"
++        grants[1]["unit"] = "cloudflared"
++    elif tamper == "postcheck_not_readonly":
++        grants[0]["postcheck"] = {"argv": ["rm", "-rf", "x"], "expect": "y"}
++    elif tamper == "missing_postcheck":
++        del grants[0]["postcheck"]
++    before = (cli["tree"] / "app.txt").read_text()
++    set_grant(monkeypatch, cli["tmp"], grants)
++    assert run_cli(["apply-staged", "lumen", str(cli["tree"])]) == 2
++    rec = read_jsonl(cli["audit"])[-1]
++    assert rec["decision"] == "deny" and rec["rule"] == rule
++    assert (cli["tree"] / "app.txt").read_text() == before
++    assert cli["calls"]["restart"] == [] and cli["calls"]["wq"] == []
++
++
++def test_apply_staged_refuses_a_subdirectory_tree(cli, monkeypatch, tmp_path):
++    patch, backup = stage(cli, {"app.txt": "version=2\n"})
++    sub = cli["tree"] / "sub"
++    sub.mkdir()
++    sub_backup = cli["tmp"] / "backups" / "sub"
++    S.make_backup(str(sub), patch.read_bytes(), str(sub_backup))   # verifies: file "new" there
++    grants = apply_grant(cli, patch, sub_backup, tree=sub)
++    pol = policy_dict(str(sub))
++    import yaml
++    (tmp_path / "policy.yaml").write_text(yaml.safe_dump(pol))
++    set_grant(monkeypatch, cli["tmp"], grants)
++    assert run_cli(["apply-staged", "lumen", str(sub)]) == 2
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "apply:tree_not_toplevel"
++    assert not (sub / "app.txt").exists()
++    assert (cli["tree"] / "app.txt").read_text() == "version=1\n"
++
++
++def test_apply_staged_thor_denied_even_with_grant(cli, monkeypatch):
++    patch, backup = stage(cli, {"app.txt": "version=2\n"})
++    set_grant(monkeypatch, cli["tmp"], apply_grant(cli, patch, backup, node="thor", unit=None))
++    assert run_cli(["apply-staged", "thor", str(cli["tree"])]) == 2
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "policy:never_nodes"
++
++
++NTFY_ARGV = ["ntfy", "access", "everyone", "ccc", "rw"]
++NTFY_INVERSE = ["ntfy", "access", "--reset", "everyone", "ccc"]
++
++
++def docker_grant(argv=NTFY_ARGV, inverse=NTFY_INVERSE, node="lumen", container="ntfy",
++                 expect="ok"):
++    return [{"kind": "docker_exec", "node": node, "container": container, "argv": list(argv),
++             "inverse_argv": list(inverse),
++             "postcheck": {"http": "http://127.0.0.1:9/ccc", "expect": expect}}]
++
++
++def test_docker_exec_allowlisted_success(cli, monkeypatch):
++    set_grant(monkeypatch, cli["tmp"], docker_grant())
++    monkeypatch.setattr(fleet_exec, "run_postcheck", lambda node, spec: (True, "200", 0.0))
++    assert run_cli(["docker-exec-allowlisted", "lumen", "ntfy", "--", *NTFY_ARGV]) == 0
++    assert cli["calls"]["ssh"] == [("lumen", ["docker", "exec", "ntfy", *NTFY_ARGV])]
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "docker_exec:postcheck_ok"
++
++
++def test_docker_exec_postcheck_mismatch_runs_inverse_and_blocks(cli, monkeypatch):
++    set_grant(monkeypatch, cli["tmp"], docker_grant())
++    monkeypatch.setattr(fleet_exec, "run_postcheck", lambda node, spec: (False, "403", 0.0))
++    assert run_cli(["docker-exec-allowlisted", "lumen", "ntfy", "--", *NTFY_ARGV]) == \
++        fleet_exec.EXIT_ROLLED_BACK
++    assert cli["calls"]["ssh"][-1] == ("lumen", ["docker", "exec", "ntfy", *NTFY_INVERSE])
++    assert cli["calls"]["wq"][0][1].startswith("ops-apply:postcheck-failed (rolled-back)")
++
++
++@pytest.mark.parametrize("argv,grant_kw,rule", [
++    (["ntfy", "access", "everyone", "ccc", "ro"], {}, "grant:no_docker_exec"),
++    (["ntfy", "user", "add", "x"], {"argv": ["ntfy", "user", "add", "x"]},
++     "policy:docker_exec_not_allowed"),
++    (NTFY_ARGV, {"inverse": ["ntfy", "user", "del", "x"]}, "policy:docker_exec_not_allowed"),
++    (NTFY_ARGV, {"expect": ""}, "grant:docker_entry_invalid"),
++])
++def test_docker_exec_denials(cli, monkeypatch, argv, grant_kw, rule):
++    set_grant(monkeypatch, cli["tmp"], docker_grant(**grant_kw))
++    assert run_cli(["docker-exec-allowlisted", "lumen", "ntfy", "--", *argv]) == 2
++    rec = read_jsonl(cli["audit"])[-1]
++    assert rec["decision"] == "deny" and rec["rule"] == rule
++    assert cli["calls"]["ssh"] == []
++
++
++def test_docker_exec_thor_denied(cli, monkeypatch):
++    set_grant(monkeypatch, cli["tmp"], docker_grant(node="thor"))
++    assert run_cli(["docker-exec-allowlisted", "thor", "ntfy", "--", *NTFY_ARGV]) == 2
++    assert read_jsonl(cli["audit"])[-1]["rule"] == "policy:never_nodes"
++    assert cli["calls"]["ssh"] == []
