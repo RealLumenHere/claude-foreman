@@ -41,6 +41,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -685,7 +686,7 @@ def resolve_repo(slug):
     return base, scheme, token, forge
 
 
-def http_json(method, base, path, scheme, token, body=None):
+def http_json(method, base, path, scheme, token, body=None, timeout=None):
     """(status_code, parsed_json_or_None). One place builds the Authorization
     header; the token never appears in any error string. Content-Type json is
     NOT optional (wq#557: Gitea binds a form-encoded body as empty fields and
@@ -699,7 +700,8 @@ def http_json(method, base, path, scheme, token, body=None):
         data = json.dumps(body).encode()
         req.add_header("Content-Type", "application/json")
     try:
-        with urllib.request.urlopen(req, data=data, timeout=HTTP_TIMEOUT_S) as resp:
+        with urllib.request.urlopen(req, data=data,
+                                    timeout=timeout or HTTP_TIMEOUT_S) as resp:
             raw = resp.read()
             code = resp.status
     except urllib.error.HTTPError as e:
@@ -717,6 +719,147 @@ def api_message(obj):
     if isinstance(obj, dict):
         return str(obj.get("message") or "no message")[:200]
     return "no message"
+
+
+# ------------------------------------------------- forge token scopes (wq#5238)
+# Which Gitea token scope each forge verb needs. ONE table, three readers:
+#   - scope_selftest(): probes the live token per verb at daemon start (journal,
+#     ntfy on a gap) and on demand through the `scope-selftest` verb;
+#   - scope_hint(): turns a scope 403 into "token lacks X, rotate" in the deny reason;
+#   - gitea-rotate-finish: mints the union (`--required-scopes gitea`) and probes the
+#     new value with `--scope-probes gitea` BEFORE writing it anywhere.
+# Why one table: wq#1727 hand-minted write:issue on 10-14; the 10-23 rotation re-minted
+# from the script's own hardcoded list (write:repository,write:user) and pr-comment
+# 403'd on every lumen/* repo (wq#5238). The scope set lived in two places and drifted.
+# All lumen/* repos share ONE token (resolve_repo), so this is per-verb, never per-repo.
+# Gitea: write:X implies read:X. GitHub repos are out of scope here (PATs carry no
+# comparable non-mutating probe); github verbs are unchanged.
+GITEA_VERB_SCOPES = {
+    "pr-open": "write:repository",
+    "pr-update": "write:repository",
+    "pr-merge": "write:repository",
+    "pr-comment": "write:issue",
+    "pr-view": "read:repository",
+    "pr-checks": "read:repository",
+    "pr-files": "read:repository",
+    "pr-list": "read:repository",
+    "git-credential": "read:repository",
+    "git-fetch": "read:repository",
+    "git-push": "write:repository",
+}
+# Minted on every rotation though no broker verb needs it: the token has always carried
+# it and gitea-rotate-finish validates a new value with GET /api/v1/user.
+GITEA_BASELINE_SCOPES = ("write:user",)
+# One non-mutating probe per scope. Gitea's API router applies tokenRequiresScopes
+# BEFORE repoAssignment and the handler, so a token lacking the scope gets 403
+# "...required scope(s), required=[...], token scope=..." while a token holding it falls
+# through to 404 on issue/PR #0, which never exists. Nothing is created or changed.
+GITEA_SCOPE_PROBES = {
+    "write:issue": ("POST", "/repos/{slug}/issues/0/comments"),
+    "write:repository": ("PATCH", "/repos/{slug}/pulls/0"),
+    "read:repository": ("GET", "/repos/{slug}/pulls/0"),
+}
+SCOPE_PROBE_TIMEOUT_S = 8
+# Scope NAMES only (e.g. write:repository) — what Gitea echoes in a scope 403.
+_TOKEN_SCOPE_RE = re.compile(r"token scope=([a-z:_,-]{1,200})")
+
+
+def gitea_required_scopes():
+    """Union of the verb table + baseline; read:X dropped where write:X is present."""
+    want = set(GITEA_VERB_SCOPES.values()) | set(GITEA_BASELINE_SCOPES)
+    return sorted(x for x in want
+                  if not (x.startswith("read:") and "write:" + x[5:] in want))
+
+
+def probe_gitea_scope(scope, slug, base, token):
+    """(verdict, token_scope_names). verdict: ok | missing | token_invalid |
+    unknown_<detail>. Never returns or logs the token."""
+    method, tmpl = GITEA_SCOPE_PROBES[scope]
+    try:
+        code, obj = http_json(method, base, tmpl.format(slug=slug), "token", token,
+                              None if method == "GET" else {},
+                              timeout=SCOPE_PROBE_TIMEOUT_S)
+    except Deny as d:
+        return f"unknown_{d.rule}", ""
+    msg = api_message(obj)
+    m = _TOKEN_SCOPE_RE.search(msg)
+    names = m.group(1) if m else ""
+    if code == 403 and "scope" in msg.lower():
+        return "missing", names
+    if code == 401:
+        return "token_invalid", names
+    if code in (404, 405, 409, 422):
+        return "ok", names
+    return f"unknown_http_{code}", names
+
+
+def scope_selftest(slug=None):
+    """Probe the live Gitea broker token for every scope a forge verb needs.
+    Scalar-only dict: one key per verb ("ok" or "<verdict>:<scope>"), plus
+    failing / gaps (comma lists of verbs), required_scopes, token_scopes (names,
+    only when Gitea echoed them), probe_repo. Raises Deny if no token resolves."""
+    cfg = load_forges()
+    owner = (cfg.get("gitea_owners") or ["lumen"])[0]
+    slug = slug or cfg.get("gitea_scope_probe_repo") or f"{owner}/claude-foreman"
+    if not REPO_RE.match(slug):
+        raise Deny("scope_probe_repo", "gitea_scope_probe_repo must be owner/name")
+    base, _scheme, token, forge = resolve_repo(slug)
+    if forge != "gitea":
+        raise Deny("scope_probe_forge", f"{slug} does not resolve to the gitea forge")
+    per_scope, seen = {}, ""
+    for scope in sorted(set(GITEA_VERB_SCOPES.values())):
+        per_scope[scope], names = probe_gitea_scope(scope, slug, base, token)
+        seen = seen or names
+    out = {"forge": "gitea", "probe_repo": slug,
+           "required_scopes": ",".join(gitea_required_scopes())}
+    failing, gaps = [], []
+    for verb, scope in sorted(GITEA_VERB_SCOPES.items()):
+        v = per_scope[scope]
+        out[verb] = "ok" if v == "ok" else f"{v}:{scope}"
+        if v != "ok":
+            failing.append(verb)
+        if v in ("missing", "token_invalid"):
+            gaps.append(verb)
+    out["failing"] = ",".join(failing)
+    out["gaps"] = ",".join(gaps)
+    if seen:
+        out["token_scopes"] = seen
+    return out
+
+
+def scope_hint(verb, rule, reason):
+    """Suffix for a forge 403 that is a SCOPE refusal, so the caller sees the fix
+    instead of a bare 403. Empty for anything else."""
+    if rule != "forge_error" or verb not in GITEA_VERB_SCOPES \
+            or "required scope" not in (reason or "").lower():
+        return ""
+    return (f" [wq#5238: broker token lacks {GITEA_VERB_SCOPES[verb]} which {verb} "
+            f"needs; check with verb scope-selftest, fix with gitea-rotate-finish "
+            f"(mints {','.join(gitea_required_scopes())})]")
+
+
+def startup_scope_selftest():
+    """Run once per daemon start, off the accept loop. A gap pages; an unreachable
+    forge or a store without the token only logs (a gate-replay daemon has none)."""
+    try:
+        r = scope_selftest()
+    except Deny as d:
+        print(f"scope-selftest: skipped [{d.rule}] {d.reason}", flush=True)
+        return
+    except Exception as e:  # noqa: BLE001 — a probe crash must not touch the broker
+        print(f"scope-selftest: crashed {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        return
+    print("scope-selftest: " + json.dumps(r, sort_keys=True), flush=True)
+    if r["gaps"]:
+        missing = sorted({GITEA_VERB_SCOPES[v] for v in r["gaps"].split(",")})
+        notify("high", "token-engine scope gap",
+               f"verbs {r['gaps']} will be refused by Gitea: broker token lacks "
+               f"{','.join(missing)} (token has {r.get('token_scopes') or '?'}). "
+               f"Fix: gitea-rotate-finish mints {r['required_scopes']} (wq#5238)")
+
+
+def verb_scope_selftest(req, grant):
+    return scope_selftest()
 
 
 def read_worktree_file(path, what):
@@ -1606,6 +1749,7 @@ def verb_ssh_run(req, grant):
 VERBS = {
     "ping": (verb_ping, "token_engine", "daemon"),
     "mask-selftest": (verb_mask_selftest, "token_engine", "daemon"),
+    "scope-selftest": (verb_scope_selftest, "token_engine", "daemon"),
     "ticket-end": (verb_ticket_end, "token_engine", "daemon"),
     "mint-test": (verb_mint_test, "token_engine", "daemon"),
     "pr-open": (verb_pr_open, "pr_write", None),
@@ -1678,7 +1822,7 @@ def handle(req, peer):
     try:
         result = handler(req, grant)
     except Deny as d:
-        return False, d.rule, d.reason, {}, "deny"
+        return False, d.rule, d.reason + scope_hint(verb, d.rule, d.reason), {}, "deny"
     except Exception as e:
         return False, "verb_crashed", f"{type(e).__name__}: {e}", {}, "error"
     return True, f"grant:{kind}", "ok", result, "allow"
@@ -1816,6 +1960,10 @@ def main():
     os.chmod(SOCK_PATH, 0o660)
     _grant_client_acls()
     srv.listen(16)
+    # wq#5238: probe the forge token's scopes per verb; off-thread so a slow or
+    # down forge never delays the broker accepting connections.
+    threading.Thread(target=startup_scope_selftest, name="scope-selftest",
+                     daemon=True).start()
     print(f"token-engine listening on {SOCK_PATH} uid={os.getuid()} "
           f"self_sha256={SELF_SHA256}", flush=True)
     while True:
@@ -1831,4 +1979,12 @@ def main():
 
 
 if __name__ == "__main__":
+    # wq#5238: the canonical scope table, for gitea-rotate-finish (no secret read).
+    if sys.argv[1:] == ["--required-scopes", "gitea"]:
+        print(",".join(gitea_required_scopes()))
+        sys.exit(0)
+    if sys.argv[1:] == ["--scope-probes", "gitea"]:
+        for _scope, (_m, _p) in sorted(GITEA_SCOPE_PROBES.items()):
+            print(_scope, _m, _p)
+        sys.exit(0)
     main()

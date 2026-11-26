@@ -926,5 +926,140 @@ class MaskRewriteTest(unittest.TestCase):
                          "plain provider output")
 
 
+class ScopeSelftestTest(unittest.TestCase):
+    """wq#5238: the per-verb Gitea scope table, its probe, the scope-selftest verb
+    and the 403 hint. http_json stubbed as a Gitea that enforces token scopes before
+    resource lookup (the real router order); token store is a tempdir."""
+
+    MSG = ("token does not have at least one of required scope(s), "
+           "required=[{need}], token scope={have}")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.peer = (1234, 1000, 1000)
+        self.saved = {k: getattr(D, k) for k in
+                      ("SECRETS_DIR", "http_json", "FORGES_PATH", "BODY_ROOT")}
+        D.SECRETS_DIR = os.path.join(self.tmp.name, "state")
+        D.BODY_ROOT = os.path.join(self.tmp.name, "root")
+        os.makedirs(os.path.join(D.SECRETS_DIR, "secrets"))
+        os.makedirs(D.BODY_ROOT)
+        with open(os.path.join(D.SECRETS_DIR, "secrets", "gitea-lumen.token"), "w") as f:
+            f.write("f" * 40 + "\n")
+        D.FORGES_PATH = os.path.join(self.tmp.name, "forges.json")
+        with open(D.FORGES_PATH, "w") as f:
+            json.dump({"gitea_url": "http://forge.test:3000", "gitea_owners": ["lumen"]}, f)
+        self.calls = []
+        self.have = {"write:repository", "write:user"}   # the wq#5238 regression token
+        D.http_json = self.fake_gitea
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(D, k, v)
+        self.tmp.cleanup()
+
+    def fake_gitea(self, method, base, path, scheme, token, body=None, timeout=None):
+        self.calls.append((method, path, body))
+        need = ("write:issue" if "/issues/" in path else
+                "read:repository" if method == "GET" else "write:repository")
+        held = need in self.have or (need.startswith("read:")
+                                     and "write:" + need[5:] in self.have)
+        if not held:
+            return 403, {"message": self.MSG.format(
+                need=need, have=",".join(sorted(self.have)))}
+        if path.endswith("/0") or "/0/" in path:
+            return 404, {"message": "not found"}
+        return 201, {"id": 9, "html_url": "http://forge.test/c/9"}
+
+    def treq(self, verb, argv=None, kind="token_engine", node="daemon"):
+        path, sha = write_grant(self.tmp.name, kind=kind, node=node)
+        r = req(path, sha, verb=verb)
+        r["argv"] = argv or []
+        return r
+
+    def test_every_verb_scope_has_a_probe(self):
+        for verb, scope in D.GITEA_VERB_SCOPES.items():
+            self.assertIn(scope, D.GITEA_SCOPE_PROBES, verb)
+            self.assertIn(verb, D.VERBS, verb)
+
+    def test_required_scopes_cover_pr_comment(self):
+        req_ = D.gitea_required_scopes()
+        self.assertIn("write:issue", req_)   # the wq#5238 regression, pinned
+        self.assertIn("write:repository", req_)
+        self.assertNotIn("read:repository", req_)   # implied by write:repository
+
+    def test_probes_never_mutate(self):
+        D.scope_selftest()
+        for method, path, body in self.calls:
+            self.assertRegex(path, r"/(issues|pulls)/0(/|$)")
+            self.assertIn(body, (None, {}))
+
+    def test_selftest_flags_missing_write_issue(self):
+        r = D.scope_selftest()
+        self.assertEqual(r["pr-comment"], "missing:write:issue")
+        self.assertEqual(r["pr-open"], "ok")
+        self.assertEqual(r["gaps"], "pr-comment")
+        self.assertEqual(r["token_scopes"], "write:repository,write:user")
+        for v in r.values():
+            self.assertNotIn("f" * 20, str(v))
+
+    def test_selftest_clean_with_required_scopes(self):
+        self.have = set(D.gitea_required_scopes())
+        r = D.scope_selftest()
+        self.assertEqual((r["failing"], r["gaps"]), ("", ""))
+        self.assertTrue(all(r[v] == "ok" for v in D.GITEA_VERB_SCOPES))
+
+    def test_scope_selftest_verb_needs_token_engine_grant(self):
+        ok, rule, *_ = D.handle(self.treq("scope-selftest", kind="pr_read",
+                                          node="repo:lumen/x"), self.peer)
+        self.assertEqual((ok, rule), (False, "grant_no_match"))
+        ok, rule, _, result, _ = D.handle(self.treq("scope-selftest"), self.peer)
+        self.assertTrue(ok, rule)
+        D.assert_response_schema({"ok": ok, "verb": "scope-selftest", "ticket": "t",
+                                  "rule": rule, "reason": "ok", "result": result,
+                                  "elapsed_s": 0.0})
+
+    def test_pr_comment_403_carries_scope_hint(self):
+        body = os.path.join(D.BODY_ROOT, "b.md")
+        with open(body, "w") as f:
+            f.write("verify evidence\n")
+        ok, rule, reason, *_ = D.handle(
+            self.treq("pr-comment", ["lumen/ccc", "56", body], kind="pr_comment",
+                      node="repo:lumen/ccc"), self.peer)
+        self.assertEqual((ok, rule), (False, "forge_error"))
+        self.assertIn("lacks write:issue", reason)
+        self.assertIn("gitea-rotate-finish", reason)
+        self.have.add("write:issue")
+        ok, rule, _, result, _ = D.handle(
+            self.treq("pr-comment", ["lumen/ccc", "56", body], kind="pr_comment",
+                      node="repo:lumen/ccc"), self.peer)
+        self.assertTrue(ok, rule)
+        self.assertEqual(result["id"], 9)
+
+    def test_startup_selftest_pages_on_gap_only(self):
+        sent = []
+        orig = D.notify
+        D.notify = lambda *a: sent.append(a)
+        try:
+            D.startup_scope_selftest()
+            self.assertEqual(len(sent), 1)
+            self.assertIn("write:issue", sent[0][2])
+            sent.clear()
+            self.have = set(D.gitea_required_scopes())
+            D.startup_scope_selftest()
+            self.assertEqual(sent, [])
+            os.unlink(os.path.join(D.SECRETS_DIR, "secrets", "gitea-lumen.token"))
+            D.startup_scope_selftest()   # no token in store: logs, never pages
+            self.assertEqual(sent, [])
+        finally:
+            D.notify = orig
+
+    def test_cli_prints_required_scopes(self):
+        out = subprocess.run(
+            [sys.executable, D.__file__, "--required-scopes", "gitea"],
+            capture_output=True, text=True, env={**os.environ, "PYTHONPATH": "/home/lumen/bin"})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout.strip(), ",".join(D.gitea_required_scopes()))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
